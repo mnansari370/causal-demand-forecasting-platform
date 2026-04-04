@@ -32,32 +32,6 @@ def mape(y_true, y_pred, eps=1.0):
     return float(np.mean(np.abs(y_true - y_pred) / np.maximum(np.abs(y_true), eps)) * 100)
 
 
-def seasonal_naive_predict(train_df, test_df, config, seasonality=7):
-    date_col = config["data"]["date_column"]
-    target_col = config["data"]["target_column"]
-    store_col = config["data"]["store_column"]
-    item_col = config["data"]["item_column"]
-
-    lookup = train_df.set_index([store_col, item_col, date_col])[target_col].to_dict()
-    global_mean = train_df[target_col].mean()
-
-    predictions = []
-    misses = 0
-
-    for _, row in test_df.iterrows():
-        hist_date = row[date_col] - pd.Timedelta(days=seasonality)
-        key = (row[store_col], row[item_col], hist_date)
-        pred = lookup.get(key, None)
-
-        if pred is None:
-            pred = global_mean
-            misses += 1
-
-        predictions.append(pred)
-
-    return np.array(predictions), misses
-
-
 def main():
     config = load_config(PROJECT_ROOT / "configs" / "base.yaml")
 
@@ -72,36 +46,57 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     train_path = processed_dir / "train_features.parquet"
-    test_path = processed_dir / "test_features.parquet"
+    val_path = processed_dir / "val_features.parquet"
 
-    if not train_path.exists() or not test_path.exists():
-        logger.error("Feature parquets not found. Run scripts/build_forecasting_features.py first.")
+    if not train_path.exists() or not val_path.exists():
+        logger.error("Required feature parquets not found. Run scripts/build_forecasting_features.py first.")
         sys.exit(1)
 
     train_df = pd.read_parquet(train_path)
-    test_df = pd.read_parquet(test_path)
+    val_df = pd.read_parquet(val_path)
 
     logger.info("Train shape: %s", train_df.shape)
-    logger.info("Test shape: %s", test_df.shape)
+    logger.info("Validation shape: %s", val_df.shape)
 
     target_col = config["data"]["target_column"]
+    lag_col = f"{target_col}_lag_7"
 
-    logger.info("Running Seasonal Naive baseline with seasonality=7")
-    preds, misses = seasonal_naive_predict(train_df, test_df, config, seasonality=7)
+    if lag_col not in val_df.columns:
+        logger.error("Required lag feature not found in validation data: %s", lag_col)
+        sys.exit(1)
 
-    y_true = test_df[target_col].values
+    global_mean = train_df[target_col].mean()
+
+    logger.info("Using %s as Seasonal Naive (S=7) prediction", lag_col)
+
+    preds = val_df[lag_col].copy()
+    fallback_mask = preds.isna()
+    fallback_count = int(fallback_mask.sum())
+
+    if fallback_count > 0:
+        logger.info(
+            "Falling back to train global mean for %d validation rows with missing %s",
+            fallback_count,
+            lag_col,
+        )
+        preds.loc[fallback_mask] = global_mean
+
+    y_true = val_df[target_col].values
+    y_pred = preds.values
 
     metrics = {
         "model": "Seasonal Naive (S=7)",
-        "rmse": round(rmse(y_true, preds), 4),
-        "mae": round(mae(y_true, preds), 4),
-        "mape": round(mape(y_true, preds), 4),
+        "evaluation_split": "validation",
+        "history_source": lag_col,
+        "rmse": round(rmse(y_true, y_pred), 4),
+        "mae": round(mae(y_true, y_pred), 4),
+        "mape": round(mape(y_true, y_pred), 4),
         "probabilistic": False,
         "coverage_90": None,
-        "fallback_global_mean_count": int(misses),
+        "fallback_global_mean_count": fallback_count,
     }
 
-    logger.info("Seasonal Naive results: %s", metrics)
+    logger.info("Seasonal Naive validation results: %s", metrics)
 
     results_df = pd.DataFrame([metrics])
     results_df.to_csv(results_dir / "week1_baseline_results.csv", index=False)
