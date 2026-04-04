@@ -61,7 +61,6 @@ def main() -> None:
     ):
         total_rows_seen += len(chunk)
 
-        # Filter date window first
         chunk = chunk[
             (chunk[config["data"]["date_column"]] >= start_date) &
             (chunk[config["data"]["date_column"]] <= end_date)
@@ -80,6 +79,7 @@ def main() -> None:
                 continue
 
             take_df = day_df.iloc[:remaining]
+
             if not take_df.empty:
                 kept_parts.append(take_df)
                 daily_counts[day] = current_count + len(take_df)
@@ -96,7 +96,6 @@ def main() -> None:
                 len(daily_counts),
             )
 
-        # Stop early if every day in the window is already filled
         total_days_needed = (end_date - start_date).days + 1
         if len(daily_counts) == total_days_needed and all(v >= rows_per_day for v in daily_counts.values()):
             logger.info("All days in requested window have reached rows_per_day. Stopping.")
