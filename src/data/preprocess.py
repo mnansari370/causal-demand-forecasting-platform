@@ -25,10 +25,25 @@ def clean_train(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     date_col = config["data"]["date_column"]
     prep = config["preprocessing"]
 
+    if promo_col in df.columns:
+        logger.info("onpromotion dtype before cleaning: %s", df[promo_col].dtype)
+        logger.info(
+            "onpromotion value counts before cleaning:\n%s",
+            df[promo_col].value_counts(dropna=False).to_string()
+        )
+
     if prep.get("fill_missing_promotions", False) and promo_col in df.columns:
         df[promo_col] = df[promo_col].fillna(False)
-        df[promo_col] = df[promo_col].map(lambda x: True if str(x).strip().lower() == "true" else False)
+        df[promo_col] = df[promo_col].map(
+            lambda x: True if str(x).strip().lower() == "true" else False
+        )
         df[promo_col] = df[promo_col].astype(int)
+
+        logger.info("onpromotion dtype after cleaning: %s", df[promo_col].dtype)
+        logger.info(
+            "onpromotion value counts after cleaning:\n%s",
+            df[promo_col].value_counts(dropna=False).to_string()
+        )
 
     if prep.get("clip_negative_sales", False) and target_col in df.columns:
         n_neg = (df[target_col] < 0).sum()

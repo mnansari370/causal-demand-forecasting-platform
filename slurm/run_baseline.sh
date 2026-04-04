@@ -1,0 +1,18 @@
+#!/bin/bash
+#SBATCH --job-name=cdf_baseline
+#SBATCH --output=logs/slurm_baseline_%j.log
+#SBATCH --error=logs/slurm_baseline_%j.err
+#SBATCH --time=01:00:00
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
+#SBATCH --partition=batch
+
+echo "Job start: $(date)"
+
+source ~/.bashrc
+conda activate cdf_env
+cd ~/causal-demand-forecasting-platform
+
+python scripts/run_baseline.py
+
+echo "Job end: $(date)"
