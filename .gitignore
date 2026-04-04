@@ -5,40 +5,51 @@ __pycache__/
 *.pyd
 *.egg-info/
 *.egg
+dist/
+build/
 
 # Environments
 .env
+.env.local
 .venv
 venv/
 cdf_env/
 
+# Editors
+.vscode/
+.idea/
+
 # Jupyter
 .ipynb_checkpoints/
-
-# VS Code
-.vscode/
 
 # Data
 data/raw/
 data/interim/
 data/processed/
+data/synthetic/
 
-# Logs and outputs
+# Outputs and logs
 logs/
 outputs/
+*.log
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Streamlit cache
-.streamlit/
-
-# Model artifacts
+# Model / serialized artifacts
 *.pt
 *.pth
 *.ckpt
 *.bin
+*.pkl
+*.joblib
 
-# Local secrets
-.env.local
+# Secrets and credentials
+.kaggle/
+kaggle.json
+secrets.yaml
+openai_key.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
