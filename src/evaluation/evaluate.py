@@ -103,8 +103,15 @@ def save_results(
     print(results_df.to_string(index=False))
     print("=" * 80)
     print()
-    print("Baseline to beat: RMSE=7.5037 | MAE=3.2951 (Seasonal Naive, test set)")
-    print()
+
+    baseline_rows = results_df[results_df["model"] == "Seasonal Naive (S=7)"]
+    if not baseline_rows.empty:
+        b = baseline_rows.iloc[0]
+        print(
+            f"Baseline to beat: RMSE={b['rmse']:.4f} | MAE={b['mae']:.4f} "
+            "(Seasonal Naive, test set)"
+        )
+        print()
 
 
 def plot_forecast_with_intervals(

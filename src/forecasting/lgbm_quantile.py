@@ -15,10 +15,11 @@ logger = get_logger(__name__)
 class LGBMQuantileForecaster:
     """
     LightGBM quantile forecaster with separate models for each quantile.
+    Uses 0.05 / 0.50 / 0.95 for better empirical 90% coverage.
     """
 
     def __init__(self, quantiles: list[float] | None = None) -> None:
-        self.quantiles = quantiles or [0.1, 0.5, 0.9]
+        self.quantiles = quantiles or [0.05, 0.5, 0.95]
         self.models: dict[float, lgb.LGBMRegressor] = {}
         self.feature_names_: list[str] = []
 
@@ -26,8 +27,8 @@ class LGBMQuantileForecaster:
             "objective": "quantile",
             "metric": "quantile",
             "learning_rate": 0.05,
-            "num_leaves": 127,
-            "min_child_samples": 20,
+            "num_leaves": 63,
+            "min_child_samples": 50,
             "feature_fraction": 0.8,
             "bagging_fraction": 0.8,
             "bagging_freq": 1,

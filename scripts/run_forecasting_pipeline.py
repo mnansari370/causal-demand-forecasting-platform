@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,8 @@ from src.features.build_features import (
 )
 from src.forecasting.lgbm_forecaster import LGBMPointForecaster
 from src.forecasting.lgbm_quantile import LGBMQuantileForecaster
+from src.forecasting.prophet_forecaster import run_prophet_on_sample
+from src.forecasting.sarimax_forecaster import run_sarimax_on_sample
 from src.forecasting.xgb_forecaster import XGBPointForecaster
 from src.utils.logger import get_logger
 
@@ -83,8 +86,6 @@ def main() -> None:
             group_cols=[store_col, item_col],
             date_col=date_col,
         )
-    else:
-        logger.warning("Promo column '%s' not found. Skipping promotion features.", promo_col)
 
     train_mask = full_df[date_col] <= pd.to_datetime(config["splits"]["train_end"])
 
@@ -138,25 +139,15 @@ def main() -> None:
 
         for row in week1_results:
             if row.get("evaluation_split") == "test":
-                all_results.append(
-                    {
-                        "model": row["model"],
-                        "rmse": row["rmse"],
-                        "mae": row["mae"],
-                        "mape": row["mape"],
-                        "coverage_90": None,
-                        "interval_width": None,
-                        "n_samples": len(y_test),
-                    }
-                )
-                logger.info(
-                    "Loaded baseline test result | RMSE=%.4f | MAE=%.4f | MAPE=%.2f%%",
-                    row["rmse"],
-                    row["mae"],
-                    row["mape"],
-                )
-    else:
-        logger.warning("Week 1 baseline not found at %s", baseline_path)
+                all_results.append({
+                    "model": row["model"],
+                    "rmse": row["rmse"],
+                    "mae": row["mae"],
+                    "mape": row["mape"],
+                    "coverage_90": None,
+                    "interval_width": None,
+                    "n_samples": len(y_test),
+                })
 
     logger.info("=" * 60)
     logger.info("STAGE 5: LightGBM Point Forecast")
@@ -181,7 +172,7 @@ def main() -> None:
     logger.info("STAGE 6: LightGBM Quantile Forecast")
     logger.info("=" * 60)
 
-    lgbm_q = LGBMQuantileForecaster(quantiles=[0.1, 0.5, 0.9])
+    lgbm_q = LGBMQuantileForecaster(quantiles=[0.05, 0.5, 0.95])
     lgbm_q.fit(X_train, y_train, X_val, y_val)
     lgbm_q.save(models_dir / "lgbm_quantile")
 
@@ -190,24 +181,22 @@ def main() -> None:
     all_results.append(
         evaluate_probabilistic_forecast(
             y_test,
-            q_preds["q0.1"],
+            q_preds["q0.05"],
             q_preds["q0.5"],
-            q_preds["q0.9"],
-            "LightGBM Quantile (Q0.1/0.5/0.9)",
+            q_preds["q0.95"],
+            "LightGBM Quantile (Q0.05/0.5/0.95)",
         )
     )
 
-    q_preds_df = pd.DataFrame(
-        {
-            date_col: test_df[date_col].values,
-            store_col: test_df[store_col].values,
-            item_col: test_df[item_col].values,
-            "actual": y_test,
-            "q0.1": q_preds["q0.1"],
-            "q0.5": q_preds["q0.5"],
-            "q0.9": q_preds["q0.9"],
-        }
-    )
+    q_preds_df = pd.DataFrame({
+        date_col: test_df[date_col].values,
+        store_col: test_df[store_col].values,
+        item_col: test_df[item_col].values,
+        "actual": y_test,
+        "q0.05": q_preds["q0.05"],
+        "q0.5": q_preds["q0.5"],
+        "q0.95": q_preds["q0.95"],
+    })
     q_preds_df.to_parquet(results_dir / "lgbm_quantile_predictions.parquet", index=False)
 
     plot_calibration(
@@ -225,9 +214,9 @@ def main() -> None:
         plot_forecast_with_intervals(
             dates=test_df.loc[sample_mask, date_col],
             y_true=test_df.loc[sample_mask, target_col].values,
-            y_pred_q10=q_preds["q0.1"][sample_mask.values],
+            y_pred_q10=q_preds["q0.05"][sample_mask.values],
             y_pred_q50=q_preds["q0.5"][sample_mask.values],
-            y_pred_q90=q_preds["q0.9"][sample_mask.values],
+            y_pred_q90=q_preds["q0.95"][sample_mask.values],
             title=f"LightGBM Quantile — Store {first_store} Item {first_item}",
             save_path=figures_dir / "sample_quantile_forecast.png",
         )
@@ -252,14 +241,62 @@ def main() -> None:
     )
 
     logger.info("=" * 60)
-    logger.info("STAGE 8: Saving results table")
+    logger.info("STAGE 8: Prophet")
+    logger.info("=" * 60)
+
+    prophet_df = run_prophet_on_sample(train_df, test_df, config, n_series=10)
+    if not prophet_df.empty:
+        prophet_df.to_csv(results_dir / "prophet_predictions.csv", index=False)
+
+        result = evaluate_point_forecast(
+            prophet_df[target_col].values,
+            prophet_df["yhat"].values,
+            "Prophet (10-series sample)",
+        )
+        cov = float(np.mean(
+            (prophet_df[target_col].values >= prophet_df["yhat_lower"].values) &
+            (prophet_df[target_col].values <= prophet_df["yhat_upper"].values)
+        ))
+        result["coverage_90"] = round(cov, 4)
+        result["interval_width"] = round(
+            float(np.mean(prophet_df["yhat_upper"].values - prophet_df["yhat_lower"].values)),
+            4,
+        )
+        all_results.append(result)
+
+    logger.info("=" * 60)
+    logger.info("STAGE 9: SARIMAX")
+    logger.info("=" * 60)
+
+    sarimax_df = run_sarimax_on_sample(train_df, test_df, config, n_series=20)
+    if not sarimax_df.empty:
+        sarimax_df.to_csv(results_dir / "sarimax_predictions.csv", index=False)
+
+        result = evaluate_point_forecast(
+            sarimax_df[target_col].values,
+            sarimax_df["forecast"].values,
+            "SARIMAX (20-series sample)",
+        )
+        cov = float(np.mean(
+            (sarimax_df[target_col].values >= sarimax_df["lower_ci"].values) &
+            (sarimax_df[target_col].values <= sarimax_df["upper_ci"].values)
+        ))
+        result["coverage_90"] = round(cov, 4)
+        result["interval_width"] = round(
+            float(np.mean(sarimax_df["upper_ci"].values - sarimax_df["lower_ci"].values)),
+            4,
+        )
+        all_results.append(result)
+
+    logger.info("=" * 60)
+    logger.info("STAGE 10: Saving results table")
     logger.info("=" * 60)
 
     results_df = build_results_table(all_results)
     save_results(results_df, results_dir, name="week2_forecasting_results")
 
     logger.info("=" * 60)
-    logger.info("Week 2 core forecasting pipeline complete")
+    logger.info("Week 2 full forecasting pipeline complete")
     logger.info("Results: %s", results_dir)
     logger.info("Models : %s", models_dir)
     logger.info("Figures: %s", figures_dir)

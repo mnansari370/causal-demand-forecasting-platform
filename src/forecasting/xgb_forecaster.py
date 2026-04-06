@@ -15,6 +15,10 @@ logger = get_logger(__name__)
 class XGBPointForecaster:
     """
     XGBoost point forecaster.
+
+    This version avoids early_stopping_rounds because the currently installed
+    XGBoost version in your environment does not support that argument in fit().
+    To reduce overfitting risk, n_estimators is lowered from 2000 to 500.
     """
 
     def __init__(self, params: dict | None = None) -> None:
@@ -28,7 +32,7 @@ class XGBPointForecaster:
             "colsample_bytree": 0.8,
             "reg_alpha": 0.1,
             "reg_lambda": 1.0,
-            "n_estimators": 2000,
+            "n_estimators": 500,
             "random_state": 42,
             "n_jobs": -1,
             "tree_method": "hist",
@@ -51,7 +55,7 @@ class XGBPointForecaster:
             X_train,
             y_train,
             eval_set=[(X_val, y_val)],
-            verbose=200,
+            verbose=100,
         )
 
         logger.info("XGBoost point model trained")
