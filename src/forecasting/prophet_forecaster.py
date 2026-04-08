@@ -19,6 +19,11 @@ def run_prophet_on_sample(
     """
     Run Prophet on the top-N series by total training volume.
 
+    Important:
+    The test period is not immediately after the train period in your setup.
+    Train ends on 2016-12-31, while test starts on 2017-07-01.
+    So Prophet must forecast far enough ahead to cover the full gap.
+
     Returns columns:
       store_nbr, item_nbr, date, unit_sales, yhat, yhat_lower, yhat_upper
     """
@@ -54,12 +59,34 @@ def run_prophet_on_sample(
 
         logger.info("train_s rows=%d | test_s rows=%d", len(train_s), len(test_s))
 
-        if len(train_s) < 60 or len(test_s) == 0:
+        if len(train_s) < 30 or len(test_s) == 0:
             logger.info("Skipping Prophet series: insufficient rows")
             continue
 
+        train_s[date_col] = pd.to_datetime(train_s[date_col])
+        test_s[date_col] = pd.to_datetime(test_s[date_col])
+
         prophet_df = train_s.rename(columns={date_col: "ds", target_col: "y"})
         prophet_df["y"] = prophet_df["y"].clip(lower=0)
+
+        train_max_date = prophet_df["ds"].max()
+        test_max_date = test_s[date_col].max()
+
+        horizon_days = (test_max_date - train_max_date).days
+        logger.info(
+            "Prophet horizon | train_max=%s | test_max=%s | periods=%d",
+            train_max_date.date(),
+            test_max_date.date(),
+            horizon_days,
+        )
+
+        if horizon_days <= 0:
+            logger.warning(
+                "Skipping Prophet series: non-positive horizon for store=%s item=%s",
+                store,
+                item,
+            )
+            continue
 
         try:
             model = Prophet(
@@ -69,18 +96,24 @@ def run_prophet_on_sample(
                 interval_width=0.90,
                 changepoint_prior_scale=0.05,
             )
-            model.add_country_holidays(country_name="EC")
+
+            # Keep holidays disabled while debugging robustness
+            # model.add_country_holidays(country_name="EC")
+
             model.fit(prophet_df)
 
-            future = model.make_future_dataframe(periods=len(test_s), freq="D")
+            # Forecast all the way from train end to test end
+            future = model.make_future_dataframe(periods=horizon_days, freq="D")
             forecast = model.predict(future)
 
-            logger.info("forecast rows=%d", len(forecast))
+            forecast["ds"] = pd.to_datetime(forecast["ds"])
 
-            test_dates = test_s[date_col].values
-            fc = forecast[forecast["ds"].isin(test_dates)][
-                ["ds", "yhat", "yhat_lower", "yhat_upper"]
-            ].copy()
+            # Keep only rows that belong to the actual test dates
+            fc = forecast.merge(
+                test_s[[date_col]].rename(columns={date_col: "ds"}),
+                on="ds",
+                how="inner",
+            )[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
 
             logger.info("matched test forecast rows=%d", len(fc))
 

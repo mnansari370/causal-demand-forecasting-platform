@@ -93,23 +93,26 @@ def save_results(
     json_path = output_dir / f"{name}.json"
 
     results_df.to_csv(csv_path, index=False)
-    json_path.write_text(json.dumps(results_df.to_dict(orient="records"), indent=2))
+
+    # Replace NaN with None before JSON serialisation
+    records = results_df.where(results_df.notna(), other=None).to_dict(orient="records")
+    json_path.write_text(json.dumps(records, indent=2))
 
     logger.info("Saved results to: %s", output_dir)
 
     print("\n" + "=" * 80)
-    print("WEEK 2 FORECASTING RESULTS — TEST SET")
+    print("FORECASTING RESULTS — TEST SET")
     print("=" * 80)
     print(results_df.to_string(index=False))
     print("=" * 80)
     print()
 
-    baseline_rows = results_df[results_df["model"] == "Seasonal Naive (S=7)"]
+    baseline_rows = results_df[results_df["model"].str.contains("Naive", na=False)]
     if not baseline_rows.empty:
         b = baseline_rows.iloc[0]
         print(
-            f"Baseline to beat: RMSE={b['rmse']:.4f} | MAE={b['mae']:.4f} "
-            "(Seasonal Naive, test set)"
+            f"Baseline: RMSE={b['rmse']:.4f} | MAE={b['mae']:.4f} "
+            "(Seasonal Naive)"
         )
         print()
 

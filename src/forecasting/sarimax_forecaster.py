@@ -68,15 +68,32 @@ def run_sarimax_on_sample(
         )
 
         try:
+            # Simpler and more robust model selection
+            if len(train_s) >= 180:
+                order = (1, 1, 1)
+                seasonal_order = (1, 1, 1, 7)
+            else:
+                order = (1, 1, 1)
+                seasonal_order = (0, 0, 0, 0)
+
             model = SARIMAX(
                 train_s,
                 exog=exog_train,
-                order=(1, 1, 1),
-                seasonal_order=(1, 1, 1, 7),
+                order=order,
+                seasonal_order=seasonal_order,
                 enforce_stationarity=False,
                 enforce_invertibility=False,
             )
-            fit = model.fit(disp=False, maxiter=200)
+            fit = model.fit(disp=False, maxiter=300)
+
+            logger.info(
+                "SARIMAX fitted | store=%s item=%s | AIC=%.2f | order=%s seasonal=%s",
+                store,
+                item,
+                fit.aic,
+                order,
+                seasonal_order,
+            )
 
             forecast_obj = fit.get_forecast(steps=len(test_s), exog=exog_test)
             pred_mean = forecast_obj.predicted_mean
