@@ -10,7 +10,7 @@ from .causal_forest import (
 )
 from .causal_plots import (
     plot_did_summary,
-    plot_hte_table,
+    plot_hte_ranking,
 )
 
 __all__ = [
@@ -21,5 +21,5 @@ __all__ = [
     "prepare_causal_forest_data",
     "run_causal_forest",
     "plot_did_summary",
-    "plot_hte_table",
+    "plot_hte_ranking",
 ]

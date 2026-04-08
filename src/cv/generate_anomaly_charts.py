@@ -1,12 +1,3 @@
-"""
-Generate the synthetic anomaly detection dataset.
-
-4 classes x 2,000 images each:
-  normal
-  spike
-  drop
-  structural_break
-"""
 from __future__ import annotations
 
 import random
@@ -100,7 +91,7 @@ def generate_anomaly_dataset(
     for cls in classes:
         logger.info("Generating class: %s", cls)
 
-        for i in tqdm(range(n_per_class), desc=f"{cls}"):
+        for i in tqdm(range(n_per_class), desc=cls):
             base = _base_series(series_length)
             pos = random.randint(10, series_length - 15)
 
