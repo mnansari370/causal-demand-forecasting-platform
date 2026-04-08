@@ -1,55 +1,8 @@
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.egg-info/
-*.egg
-dist/
-build/
-
-# Environments
-.env
-.env.local
-.venv
-venv/
-cdf_env/
-
-# Editors
-.vscode/
-.idea/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Data
+logs/
 data/raw/
 data/interim/
 data/processed/
-data/synthetic/
-
-# Outputs and logs
-logs/
-outputs/
-*.log
-
-# Model / serialized artifacts
-*.pt
-*.pth
-*.ckpt
-*.bin
-*.pkl
-*.joblib
-
-# Secrets and credentials
-.kaggle/
-kaggle.json
-secrets.yaml
-openai_key.txt
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Streamlit
-.streamlit/
+outputs/models/
+outputs/data_checks/
