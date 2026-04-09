@@ -1,8 +1,32 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Logs
 logs/
+*.log
+*.err
+
+# Outputs
+outputs/
+
+# Data
+data/synthetic/
 data/raw/
-data/interim/
-data/processed/
-outputs/models/
-outputs/data_checks/
+
+# Models
+*.pt
+*.pth
+
+# Images
+*.png
+*.jpg
+
+# JSON/CSV generated outputs
+*.json
+*.csv
+
+# Env
+.env
+.env.*

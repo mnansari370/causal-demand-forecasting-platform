@@ -242,5 +242,4 @@ def compute_revenue_proxy_curve(
                 "demand_delta_pct": round(float((demand_multiplier - 1.0) * 100.0), 2),
             }
         )
-
     return pd.DataFrame(rows)

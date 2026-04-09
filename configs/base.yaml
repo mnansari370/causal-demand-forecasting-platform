@@ -80,11 +80,11 @@ cv_anomaly:
   model_save_path: outputs/models/cv_anomaly_detector.pt
 
 llm:
-  provider: "openai"
-  model_name: "gpt-4o-mini"
+  provider: "mock"
+  model_name: "claude-3-5-haiku-latest"
   max_tokens: 512
   temperature: 0.2
-  system_role: "Senior Data Science Analyst at a retail company"
+  system_role: "Computer Science student building a demand forecasting and decision intelligence project"
 
 evaluation:
   metrics: ["rmse", "mae", "mape", "coverage_90"]
