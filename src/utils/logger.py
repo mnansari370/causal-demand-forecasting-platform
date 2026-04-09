@@ -1,3 +1,10 @@
+"""
+Shared logger factory for the whole project.
+
+Using one helper instead of repeated logging.basicConfig() calls keeps
+formatting consistent across scripts and source modules. It also makes it
+easy to write logs both to stdout and to a file when running on HPC.
+"""
 from __future__ import annotations
 
 import logging
@@ -6,15 +13,26 @@ from datetime import datetime
 from pathlib import Path
 
 
-def get_logger(name: str, log_dir: str | Path | None = None, level: str = "INFO") -> logging.Logger:
+def get_logger(
+    name: str,
+    log_dir: str | Path | None = None,
+    level: str = "INFO",
+) -> logging.Logger:
     """
     Create or return a configured logger.
 
-    Writes to stdout and optionally to a timestamped log file.
-    Useful for local runs and HPC/SLURM jobs.
+    Parameters
+    ----------
+    name:
+        Logger name, usually __name__ from the calling module.
+    log_dir:
+        Optional directory for timestamped log files.
+    level:
+        Logging level as a string, e.g. "INFO" or "DEBUG".
     """
     logger = logging.getLogger(name)
 
+    # Avoid duplicate handlers if the logger was already created earlier
     if logger.handlers:
         return logger
 
@@ -29,9 +47,11 @@ def get_logger(name: str, log_dir: str | Path | None = None, level: str = "INFO"
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
+    # Optional file logging for long local runs or SLURM jobs
     if log_dir is not None:
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"{name.replace('.', '_')}_{timestamp}.log"
 

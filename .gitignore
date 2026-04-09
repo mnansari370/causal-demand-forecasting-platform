@@ -1,32 +1,22 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-
-# Logs
-logs/
-*.log
-*.err
+# Data
+data/raw/
+data/interim/
+data/processed/
+data/synthetic/
 
 # Outputs
 outputs/
+logs/
 
-# Data
-data/synthetic/
-data/raw/
+# Python
+__pycache__/
+*.pyc
 
-# Models
+# Models / checkpoints
 *.pt
 *.pth
+*.pkl
 
-# Images
-*.png
-*.jpg
-
-# JSON/CSV generated outputs
-*.json
-*.csv
-
-# Env
-.env
-.env.*
+# OS / editor
+.DS_Store
+.vscode/

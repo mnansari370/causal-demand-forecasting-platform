@@ -1,3 +1,9 @@
+"""
+Core forecasting metrics.
+
+MAPE uses a denominator floor of eps=1.0 to avoid exploding values on
+zero-sales rows, which are common in retail demand data.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +24,8 @@ def mae(y_true, y_pred) -> float:
 def mape(y_true, y_pred, eps: float = 1.0) -> float:
     """
     Mean Absolute Percentage Error.
-    eps avoids division by zero for zero-sales rows.
+
+    eps prevents division by zero for zero-demand rows.
     """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -27,7 +34,9 @@ def mape(y_true, y_pred, eps: float = 1.0) -> float:
 
 def coverage_at_90(y_true, y_lower, y_upper) -> float:
     """
-    Fraction of true values inside the 90% prediction interval.
+    Fraction of true values inside the prediction interval.
+
+    For a well-calibrated 90% interval, this should be close to 0.90.
     """
     y_true = np.asarray(y_true, dtype=float)
     y_lower = np.asarray(y_lower, dtype=float)

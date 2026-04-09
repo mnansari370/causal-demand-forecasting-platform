@@ -1,3 +1,6 @@
+"""
+Plots for promotion sensitivity and scenario analysis.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,8 +22,11 @@ def plot_family_promotion_sensitivity(
     top_n: int = 20,
     save_path: str | Path | None = None,
 ) -> None:
+    """
+    Plot the most and least promotion-sensitive families.
+    """
     if sensitivity_df.empty:
-        logger.warning("Empty sensitivity DataFrame; skipping family sensitivity plot")
+        logger.warning("Empty sensitivity dataframe — skipping family plot")
         return
 
     if len(sensitivity_df) > top_n:
@@ -58,15 +64,13 @@ def plot_family_promotion_sensitivity(
     ax.set_xlabel("Promotion coefficient")
     ax.set_title("Promotion Sensitivity by Family")
     ax.grid(True, axis="x", alpha=0.3)
+
     plt.tight_layout()
 
     if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        logger.info("Saved family promotion sensitivity plot: %s", save_path)
-
-    plt.close()
+        _save_fig(fig, save_path)
+    else:
+        plt.close(fig)
 
 
 def plot_revenue_proxy_curve(
@@ -74,8 +78,11 @@ def plot_revenue_proxy_curve(
     label_name: str = "Selected Group",
     save_path: str | Path | None = None,
 ) -> None:
+    """
+    Compare expected revenue proxy with and without promotion.
+    """
     if revenue_df.empty:
-        logger.warning("Empty revenue proxy DataFrame; skipping plot")
+        logger.warning("Empty revenue proxy dataframe — skipping plot")
         return
 
     labels = ["Promotion OFF" if x == 0 else "Promotion ON" for x in revenue_df["promotion_on"]]
@@ -97,34 +104,31 @@ def plot_revenue_proxy_curve(
     ax.set_ylabel("Revenue Proxy")
     ax.set_title(f"Revenue Proxy Comparison — {label_name}")
     ax.grid(True, axis="y", alpha=0.3)
+
     plt.tight_layout()
 
     if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        logger.info("Saved revenue proxy plot: %s", save_path)
-
-    plt.close()
+        _save_fig(fig, save_path)
+    else:
+        plt.close(fig)
 
 
 def plot_scenario_comparison(
     scenario_df: pd.DataFrame,
     save_path: str | Path | None = None,
 ) -> None:
+    """
+    Compare revenue delta across scenarios.
+    """
     if scenario_df.empty:
-        logger.warning("Empty scenario DataFrame; skipping plot")
+        logger.warning("Empty scenario dataframe — skipping plot")
         return
 
     plot_df = scenario_df.copy()
     plot_df["scenario"] = plot_df["run_promotion"].map({False: "No Promotion", True: "Promotion"})
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(
-        plot_df["scenario"],
-        plot_df["revenue_delta_pct"],
-        alpha=0.85,
-    )
+    ax.bar(plot_df["scenario"], plot_df["revenue_delta_pct"], alpha=0.85)
 
     for i, val in enumerate(plot_df["revenue_delta_pct"]):
         ax.text(i, val, f"{val:+.2f}%", ha="center", va="bottom", fontsize=10)
@@ -133,21 +137,22 @@ def plot_scenario_comparison(
     ax.set_ylabel("Revenue Delta (%)")
     ax.set_title("Scenario Comparison — Revenue Delta vs Baseline")
     ax.grid(True, axis="y", alpha=0.3)
+
     plt.tight_layout()
 
     if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        logger.info("Saved scenario comparison plot: %s", save_path)
-
-    plt.close()
+        _save_fig(fig, save_path)
+    else:
+        plt.close(fig)
 
 
 def plot_simulation_output(
     scenario: dict,
     save_path: str | Path | None = None,
 ) -> None:
+    """
+    Plot revenue range for one scenario using q05, q50, q95.
+    """
     labels = ["Q0.05", "Q0.50", "Q0.95"]
     values = [
         scenario["expected_revenue_q05"],
@@ -177,12 +182,18 @@ def plot_simulation_output(
     )
     ax.legend()
     ax.grid(True, axis="y", alpha=0.3)
+
     plt.tight_layout()
 
     if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        logger.info("Saved simulation output plot: %s", save_path)
+        _save_fig(fig, save_path)
+    else:
+        plt.close(fig)
 
-    plt.close()
+
+def _save_fig(fig, path: str | Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved figure: %s", path)

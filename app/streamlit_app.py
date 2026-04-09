@@ -1,3 +1,21 @@
+"""
+Streamlit demo interface for the demand forecasting platform.
+
+Run with:
+    streamlit run app/streamlit_app.py
+
+The app reads from precomputed outputs in outputs/evaluation/ and
+outputs/figures/. All heavy computation happens in the scripts, not
+inside the app itself. This keeps the interface fast and reproducible.
+
+Pages:
+- Overview
+- Forecasting
+- Causal Inference
+- Promotion Sensitivity
+- Anomaly Detector
+- LLM Assistant
+"""
 from __future__ import annotations
 
 import json
@@ -44,17 +62,16 @@ def show_figure(path: Path, caption: str = "") -> None:
     if path.exists():
         st.image(str(path), caption=caption, use_container_width=True)
     else:
-        st.info(f"Figure not yet generated: {path.name}")
+        st.info(f"Figure not found: {path.name}. Run the corresponding pipeline first.")
 
 
-st.sidebar.title("📊 Navigation")
 page = st.sidebar.radio(
-    "Select page",
+    "Navigation",
     [
         "🏠 Overview",
         "📈 Forecasting",
         "🔬 Causal Inference",
-        "💰 Elasticity & Simulation",
+        "💰 Promotion Sensitivity",
         "👁️ Anomaly Detector",
         "🤖 LLM Assistant",
     ],
@@ -62,63 +79,60 @@ page = st.sidebar.radio(
 
 if page == "🏠 Overview":
     st.title("Causal Demand Forecasting & Decision Intelligence Platform")
-    st.caption("University of Luxembourg Master's Project")
+    st.caption("University of Luxembourg — MSc Computer Science Project")
 
     st.markdown(
-        """
-This platform combines:
-- demand forecasting
-- probabilistic forecasting
-- causal inference
-- promotion sensitivity / elasticity analysis
-- scenario simulation
-- visual anomaly detection
-- grounded LLM analytics
-"""
+        "This platform combines **demand forecasting**, **causal inference**, "
+        "**promotion sensitivity analysis**, **visual anomaly detection**, and "
+        "**an LLM-based analytics assistant** on the Favorita retail dataset."
     )
 
-    w1 = load_json(RESULTS_DIR / "week1_baseline_results.json")
-    w2 = load_json(RESULTS_DIR / "week2_forecasting_results.json")
+    forecasting = load_json(RESULTS_DIR / "forecasting_results.json")
     did = load_json(RESULTS_DIR / "causal_did_result.json")
     cv_eval = load_json(RESULTS_DIR / "cv_evaluation_results.json")
 
     col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        if w1:
-            test_row = next((r for r in w1 if r.get("evaluation_split") == "test"), {})
-            st.metric("Baseline RMSE", f"{test_row.get('rmse', 'N/A')}")
+    if forecasting:
+        naive = next((row for row in forecasting if "Naive" in str(row.get("model", ""))), {})
+        lgbm = next((row for row in forecasting if row.get("model") == "LightGBM Point"), {})
 
-    with col2:
-        if w2:
-            lgbm = next((r for r in w2 if r.get("model") == "LightGBM Point"), {})
-            if lgbm:
-                st.metric("LightGBM RMSE", f"{lgbm.get('rmse', 'N/A')}")
+        with col1:
+            st.metric("Baseline RMSE", f"{naive.get('rmse', 'N/A')}")
+        with col2:
+            st.metric("LightGBM RMSE", f"{lgbm.get('rmse', 'N/A')}")
 
-    with col3:
-        if did:
+    if did:
+        with col3:
             st.metric("DiD Promotion Lift", f"{did.get('estimate', 'N/A')} units/day")
 
-    with col4:
-        if cv_eval:
+    if cv_eval:
+        with col4:
             st.metric("CV Macro F1", f"{cv_eval.get('macro_f1', 'N/A')}")
 
     st.divider()
-    st.subheader("Main Results Table")
+
     table_path = RESULTS_DIR / "main_results_table.txt"
     if table_path.exists():
+        st.subheader("Main Results Table")
         st.code(table_path.read_text(encoding="utf-8"), language=None)
     else:
-        st.info("Run scripts/run_llm_pipeline.py to generate the main results table.")
+        st.info("Run scripts/llm_pipeline.py to generate the main results table.")
 
 elif page == "📈 Forecasting":
-    st.title("📈 Forecasting Results")
+    st.title("Forecasting Results")
 
-    w2 = load_json(RESULTS_DIR / "week2_forecasting_results.json")
-    if w2:
-        df = pd.DataFrame(w2)
-        cols = [c for c in ["model", "rmse", "mae", "mape", "coverage_90", "interval_width", "n_samples"] if c in df.columns]
+    forecasting = load_json(RESULTS_DIR / "forecasting_results.json")
+    if forecasting:
+        df = pd.DataFrame(forecasting)
+        cols = [
+            c for c in
+            ["model", "rmse", "mae", "mape", "coverage_90", "interval_width", "n_samples"]
+            if c in df.columns
+        ]
         st.dataframe(df[cols], use_container_width=True)
+    else:
+        st.info("No forecasting results found. Run scripts/forecasting.py.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -126,23 +140,31 @@ elif page == "📈 Forecasting":
     with col2:
         show_figure(FIGURES_DIR / "lgbm_quantile_calibration.png", "Quantile Calibration")
 
-    show_figure(FIGURES_DIR / "sample_quantile_forecast.png", "Sample Quantile Forecast")
+    show_figure(
+        FIGURES_DIR / "sample_quantile_forecast.png",
+        "Sample Forecast with 90% Prediction Interval",
+    )
 
 elif page == "🔬 Causal Inference":
-    st.title("🔬 Causal Inference")
+    st.title("Causal Inference")
 
     did = load_json(RESULTS_DIR / "causal_did_result.json")
     placebo = load_json(RESULTS_DIR / "causal_placebo_result.json")
     naive = load_json(RESULTS_DIR / "causal_naive_comparison.json")
 
     if did and naive:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
+
         with col1:
-            st.metric("Naive estimate", f"{naive.get('naive_estimate', 'N/A')} units/day")
+            st.metric("Naive estimate", f"{naive.get('naive_estimate', 'N/A')} u/day")
         with col2:
-            st.metric("DiD estimate", f"{did.get('estimate', 'N/A')} units/day")
+            st.metric("DiD ATT", f"{did.get('estimate', 'N/A')} u/day")
         with col3:
             st.metric("p-value", f"{did.get('p_value', 'N/A')}")
+        with col4:
+            if naive.get("naive_estimate") and did.get("estimate"):
+                bias = abs((naive["naive_estimate"] - did["estimate"]) / naive["naive_estimate"] * 100)
+                st.metric("Selection bias", f"{bias:.1f}%")
 
     if placebo:
         verdict = placebo.get("verdict", "N/A")
@@ -157,21 +179,22 @@ elif page == "🔬 Causal Inference":
 
     col1, col2 = st.columns(2)
     with col1:
-        show_figure(FIGURES_DIR / "causal_store_hte.png", "Store HTE Ranking")
+        show_figure(FIGURES_DIR / "causal_store_hte.png", "Store Promotion Sensitivity")
     with col2:
-        show_figure(FIGURES_DIR / "causal_item_hte.png", "Item HTE Ranking")
+        show_figure(FIGURES_DIR / "causal_item_hte.png", "Item Promotion Sensitivity")
 
     item_hte = load_csv(RESULTS_DIR / "causal_item_hte.csv")
     if item_hte is not None:
         st.subheader("Item HTE Table")
         st.dataframe(item_hte.head(20), use_container_width=True)
 
-elif page == "💰 Elasticity & Simulation":
-    st.title("💰 Elasticity & Scenario Simulation")
+elif page == "💰 Promotion Sensitivity":
+    st.title("Promotion Sensitivity & Scenario Simulation")
 
     panel = load_json(RESULTS_DIR / "panel_promotion_sensitivity.json")
     if panel:
         col1, col2, col3 = st.columns(3)
+
         with col1:
             st.metric("Promotion coefficient", f"{panel.get('promotion_coef', 'N/A')}")
         with col2:
@@ -179,65 +202,70 @@ elif page == "💰 Elasticity & Simulation":
         with col3:
             st.metric("Items analysed", f"{panel.get('n_items', 'N/A')}")
 
-    show_figure(FIGURES_DIR / "promotion_sensitivity_by_family.png", "Promotion Sensitivity by Family")
+    show_figure(
+        FIGURES_DIR / "promotion_sensitivity_by_family.png",
+        "Promotion Sensitivity by Family",
+    )
 
-    scenario_df = load_csv(RESULTS_DIR / "week4_scenario_grid.csv")
+    scenario_df = load_csv(RESULTS_DIR / "scenario_grid.csv")
     if scenario_df is not None:
-        st.subheader("Scenario Table")
+        st.subheader("Scenario Grid")
         st.dataframe(scenario_df, use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        show_figure(FIGURES_DIR / "week4_best_simulation_panel.png", "Best Panel Scenario")
+        show_figure(FIGURES_DIR / "simulation_panel.png", "Panel-Based Promotion Scenario")
     with col2:
-        show_figure(FIGURES_DIR / "week4_best_simulation_did.png", "Best DiD Scenario")
+        show_figure(FIGURES_DIR / "simulation_did.png", "DiD-Based Promotion Scenario")
 
 elif page == "👁️ Anomaly Detector":
-    st.title("👁️ Visual Anomaly Detector")
+    st.title("Visual Anomaly Detector")
 
     cv_eval = load_json(RESULTS_DIR / "cv_evaluation_results.json")
     if cv_eval:
         col1, col2, col3 = st.columns(3)
+
         with col1:
             st.metric("Accuracy", f"{cv_eval.get('accuracy', 'N/A')}")
         with col2:
             st.metric("Macro F1", f"{cv_eval.get('macro_f1', 'N/A')}")
         with col3:
-            st.metric("Test Samples", f"{cv_eval.get('n_test_samples', 'N/A')}")
+            st.metric("Test samples", f"{cv_eval.get('n_test_samples', 'N/A')}")
 
-        metrics = cv_eval.get("per_class_metrics") or {}
-        if metrics:
-            rows = [{"class": cls, **vals} for cls, vals in metrics.items()]
-            st.subheader("Per-Class Metrics")
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        per_class = cv_eval.get("per_class_metrics") or {}
+        if per_class:
+            st.subheader("Per-class Metrics")
+            st.dataframe(
+                pd.DataFrame([{"class": cls, **metrics} for cls, metrics in per_class.items()]),
+                use_container_width=True,
+            )
 
     col1, col2 = st.columns(2)
     with col1:
         show_figure(FIGURES_DIR / "cv_confusion_matrix.png", "Confusion Matrix")
     with col2:
-        show_figure(FIGURES_DIR / "cv_per_class_f1.png", "Per-Class F1")
+        show_figure(FIGURES_DIR / "cv_per_class_metrics.png", "Per-class Metrics")
 
     st.subheader("Grad-CAM Examples")
     gradcam_files = sorted(FIGURES_DIR.glob("gradcam_*.png"))
     if gradcam_files:
-        for img in gradcam_files[:9]:
-            show_figure(img, img.name)
+        cols = st.columns(3)
+        for i, img in enumerate(gradcam_files[:9]):
+            with cols[i % 3]:
+                show_figure(img, img.stem)
     else:
         st.info("No Grad-CAM images found.")
 
-    st.subheader("Flagged Real-Series Anomalies")
     anomaly_results = load_json(RESULTS_DIR / "anomaly_detection_results.json")
     if anomaly_results:
-        flagged = [r for r in anomaly_results if r.get("is_anomaly")]
-        st.metric("Flagged anomalies", f"{len(flagged)} / {len(anomaly_results)}")
+        flagged = [row for row in anomaly_results if row.get("is_anomaly")]
+        st.subheader(f"Flagged Real-Series Anomalies ({len(flagged)}/{len(anomaly_results)})")
         if flagged:
             st.dataframe(pd.DataFrame(flagged), use_container_width=True)
-    else:
-        st.info("No anomaly detection results found.")
 
 elif page == "🤖 LLM Assistant":
-    st.title("🤖 LLM Analytics Assistant")
-    st.caption("Grounded natural-language explanations from saved model outputs")
+    st.title("LLM Analytics Assistant")
+    st.caption("Grounded explanations from saved model outputs")
 
     try:
         from src.llm.assistant import query_llm
@@ -252,45 +280,51 @@ elif page == "🤖 LLM Assistant":
 
     if llm_ready:
         question = st.text_area(
-            "Ask a question about the analytics outputs:",
-            value="Generate a weekly executive summary based on all available model outputs.",
-            height=100,
+            "Ask a question:",
+            value="Generate an executive summary based on all available model outputs.",
+            height=90,
         )
 
-        provider = st.selectbox("Provider", ["mock", "anthropic"], index=0)
-        model = st.text_input("Model name", value="claude-3-5-haiku-latest")
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            provider = st.selectbox("Provider", ["mock", "anthropic"])
+        with col2:
+            model = st.text_input("Model", value="claude-3-5-haiku-latest")
 
         if st.button("Ask", type="primary"):
-            result = query_llm(
-                question=question,
-                context_str=context_str,
-                provider=provider,
-                model=model,
-                max_tokens=600,
-                temperature=0.2,
-            )
+            with st.spinner("Querying..."):
+                result = query_llm(
+                    question=question,
+                    context_str=context_str,
+                    provider=provider,
+                    model=model,
+                    max_tokens=600,
+                    temperature=0.2,
+                )
 
-            st.subheader("Response")
             st.markdown(result["answer"])
 
-            with st.expander("Model info"):
-                st.write(f"Model: {result['model_used']}")
-                st.write(f"Input tokens: {result['input_tokens']}")
-                st.write(f"Output tokens: {result['output_tokens']}")
-                st.write(f"Success: {result['success']}")
-                st.write(f"Error: {result['error']}")
+            if result["success"]:
+                st.caption(
+                    f"Model: {result['model_used']} | "
+                    f"Input tokens: {result['input_tokens']} | "
+                    f"Output tokens: {result['output_tokens']}"
+                )
 
-        filled_eval = RESULTS_DIR / "llm_human_eval_filled.csv"
-        if filled_eval.exists():
+        eval_filled = RESULTS_DIR / "llm_human_eval_filled.csv"
+        if eval_filled.exists():
             st.divider()
             st.subheader("Human Evaluation Scores")
-            eval_df = pd.read_csv(filled_eval)
+
+            eval_df = pd.read_csv(eval_filled)
             score_cols = ["accuracy_1_5", "usefulness_1_5", "groundedness_1_5", "clarity_1_5"]
             available = [c for c in score_cols if c in eval_df.columns]
+
             if available:
                 numeric = eval_df[available].apply(pd.to_numeric, errors="coerce")
-                cols = st.columns(len(available))
+                metric_cols = st.columns(len(available))
                 labels = ["Accuracy", "Usefulness", "Groundedness", "Clarity"]
-                for col, metric_name, score_col in zip(cols, labels, available):
+
+                for col, label, score_col in zip(metric_cols, labels, available):
                     with col:
-                        st.metric(metric_name, f"{numeric[score_col].mean():.2f} / 5")
+                        st.metric(label, f"{numeric[score_col].mean():.2f} / 5")

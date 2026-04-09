@@ -1,3 +1,7 @@
+"""
+LLM assistant utilities.
+"""
+
 from .assistant import EVAL_QUERIES, SYSTEM_PROMPT, query_llm
 from .context_builder import build_context, format_context_for_prompt
 

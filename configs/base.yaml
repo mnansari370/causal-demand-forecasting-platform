@@ -1,3 +1,8 @@
+# Project-wide configuration for the demand forecasting platform.
+# All paths are relative to the project root.
+# Scripts read this file at startup, so changing values here updates
+# the behaviour of the full pipeline.
+
 project:
   name: causal-demand-forecasting-platform
   random_seed: 42
@@ -17,6 +22,7 @@ data:
     oil: oil.csv
     holidays_events: holidays_events.csv
 
+  # Column names in the Favorita dataset
   target_column: unit_sales
   date_column: date
   store_column: store_nbr
@@ -24,13 +30,22 @@ data:
   promo_column: onpromotion
 
 preprocessing:
+  # Full date range kept from the original dataset
   min_date: "2013-01-01"
   max_date: "2017-08-31"
   fill_missing_promotions: true
   clip_negative_sales: true
+
+  # Keep raw unit_sales for interpretability.
+  # If this is switched on, downstream evaluation and interpretation
+  # need to be adjusted accordingly.
   log_transform_target: false
+
   sample_rows: null
 
+# Development subset for faster local/HPC experimentation.
+# Instead of randomly sampling rows, we keep a fixed date window and
+# whole stores to preserve temporal continuity for lag features.
 dev_subset:
   enabled: true
   subset_start_date: "2016-06-01"
@@ -39,6 +54,8 @@ dev_subset:
   chunk_size: 500000
   output_file: train_dev_subset.parquet
 
+# Strict chronological split.
+# No random splitting is used anywhere in the project.
 splits:
   train_end: "2016-12-31"
   val_start: "2017-01-01"
@@ -47,44 +64,61 @@ splits:
   test_end: "2017-08-31"
 
 features:
+  # Capture short-term, weekly, biweekly, and monthly demand memory
   lag_days: [1, 7, 14, 28]
   rolling_windows: [7, 28]
+
+  # Smoothed target encoding for high-cardinality categorical fields
   use_target_encoding: true
   target_encoding_cols: ["store_nbr", "item_nbr", "family"]
 
 forecasting:
   models: ["seasonal_naive", "lightgbm", "xgboost"]
-  quantiles: [0.1, 0.5, 0.9]
+
+  # Quantiles chosen to form a nominal 90% prediction interval
+  quantiles: [0.05, 0.5, 0.95]
+
   horizon_days: 16
 
 causal:
   treatment_column: onpromotion
+
+  # Minimum observations required per series in each DiD period
   did_min_pre_periods: 4
   did_min_post_periods: 4
+
   placebo_shift_weeks: 8
   causal_forest_n_estimators: 500
 
 elasticity:
+  # Favorita has no real price column, so this project estimates
+  # promotion sensitivity rather than true price elasticity.
   price_column: null
   fixed_effects: ["store_nbr", "family"]
 
 cv_anomaly:
   image_size: 224
+
+  # 4 classes × 2000 images = 8000 synthetic chart images
   n_images_per_class: 2000
   anomaly_types: ["spike", "drop", "structural_break", "normal"]
+
   model_architecture: "resnet18"
   epochs: 10
   batch_size: 32
   learning_rate: 0.0001
+
   synthetic_data_dir: data/synthetic/anomaly_charts
   model_save_path: outputs/models/cv_anomaly_detector.pt
 
 llm:
+  # Default to mock mode so the pipeline can run without an API key.
+  # To enable live responses, set provider to "anthropic" and export
+  # ANTHROPIC_API_KEY in the environment.
   provider: "mock"
   model_name: "claude-3-5-haiku-latest"
-  max_tokens: 512
+  max_tokens: 600
   temperature: 0.2
-  system_role: "Computer Science student building a demand forecasting and decision intelligence project"
 
 evaluation:
   metrics: ["rmse", "mae", "mape", "coverage_90"]

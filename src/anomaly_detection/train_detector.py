@@ -1,8 +1,19 @@
+"""
+Train a visual anomaly detector on synthetic chart images.
+
+We use a pretrained ResNet-18 and fine-tune it in two phases:
+
+1. Warmup phase:
+   Freeze the backbone and train only the classifier head.
+2. Fine-tuning phase:
+   Unfreeze the full network and continue training with a smaller learning rate.
+
+This is more stable than training the full network immediately.
+"""
 from __future__ import annotations
 
 import json
 import random
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -16,11 +27,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(PROJECT_ROOT))
-
-from src.cv.split_dataset import load_split_manifest
-from src.data.load_data import load_config
+from src.anomaly_detection.split_dataset import load_split_manifest
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +42,7 @@ if torch.cuda.is_available():
 
 class SyntheticChartDataset(Dataset):
     """
-    Dataset backed by a fixed split manifest.
+    Dataset backed by the split manifest.
     """
 
     def __init__(
@@ -52,17 +59,20 @@ class SyntheticChartDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         path, label = self.samples[idx]
         image = Image.open(path).convert("RGB")
+
         if self.transform is not None:
             image = self.transform(image)
+
         return image, label
 
 
 def get_transforms(image_size: int = 224) -> dict[str, transforms.Compose]:
     """
-    Use only mild photometric augmentation.
-    No horizontal flip, no time-reversing transforms.
-    """
+    Use only mild augmentation.
 
+    We avoid horizontal flips because that would reverse time direction
+    in a time-series chart.
+    """
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
@@ -83,14 +93,17 @@ def get_transforms(image_size: int = 224) -> dict[str, transforms.Compose]:
 
 
 def build_dataloaders_from_manifest(
-    manifest_path: Path,
+    manifest_path: str | Path,
     image_size: int = 224,
     batch_size: int = 32,
     num_workers: int = 4,
     pin_memory: bool = False,
 ) -> tuple[DataLoader, DataLoader, list[str]]:
+    """
+    Build train and validation dataloaders from the saved manifest.
+    """
     manifest = load_split_manifest(manifest_path)
-    tfs = get_transforms(image_size=image_size)
+    transforms_map = get_transforms(image_size=image_size)
 
     class_names = sorted(manifest["splits"]["train"].keys())
     class_to_idx = {cls: i for i, cls in enumerate(class_names)}
@@ -106,8 +119,8 @@ def build_dataloaders_from_manifest(
             [(path, class_to_idx[cls]) for path in manifest["splits"]["val"][cls]]
         )
 
-    train_ds = SyntheticChartDataset(train_samples, transform=tfs["train"])
-    val_ds = SyntheticChartDataset(val_samples, transform=tfs["eval"])
+    train_ds = SyntheticChartDataset(train_samples, transform=transforms_map["train"])
+    val_ds = SyntheticChartDataset(val_samples, transform=transforms_map["eval"])
 
     train_loader = DataLoader(
         train_ds,
@@ -125,8 +138,10 @@ def build_dataloaders_from_manifest(
     )
 
     logger.info(
-        "CV dataloaders ready | train=%d | val=%d | classes=%s",
-        len(train_ds), len(val_ds), class_names
+        "Dataloaders ready | train=%d | val=%d | classes=%s",
+        len(train_ds),
+        len(val_ds),
+        class_names,
     )
 
     return train_loader, val_loader, class_names
@@ -134,16 +149,16 @@ def build_dataloaders_from_manifest(
 
 def build_resnet18(n_classes: int = 4, freeze_backbone: bool = True) -> nn.Module:
     """
-    ResNet-18 with custom 4-class head.
+    Build a ResNet-18 with a custom classification head.
     """
     model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
 
-    for param in model.parameters():
-        param.requires_grad = not freeze_backbone
+    if freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
 
-    in_features = model.fc.in_features
     model.fc = nn.Sequential(
-        nn.Linear(in_features, 256),
+        nn.Linear(model.fc.in_features, 256),
         nn.ReLU(),
         nn.Dropout(0.3),
         nn.Linear(256, n_classes),
@@ -156,64 +171,50 @@ def build_resnet18(n_classes: int = 4, freeze_backbone: bool = True) -> nn.Modul
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     logger.info(
-        "ResNet-18 built | freeze_backbone=%s | trainable=%d / %d",
-        freeze_backbone,
+        "ResNet-18 built | trainable=%d / %d | freeze_backbone=%s",
         n_trainable,
         n_total,
+        freeze_backbone,
     )
     return model
 
 
-def train_one_epoch(
+def _run_epoch(
     model: nn.Module,
     loader: DataLoader,
     criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer | None,
     device: torch.device,
+    train: bool,
 ) -> tuple[float, float]:
-    model.train()
+    """
+    Run one training or validation epoch.
+    """
+    if train:
+        model.train()
+    else:
+        model.eval()
 
     total_loss = 0.0
     correct = 0
     total = 0
 
-    for images, labels in loader:
-        images = images.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+    context = torch.enable_grad() if train else torch.no_grad()
 
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * images.size(0)
-        preds = outputs.argmax(dim=1)
-        correct += preds.eq(labels).sum().item()
-        total += labels.size(0)
-
-    return total_loss / total, correct / total
-
-
-def validate(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-) -> tuple[float, float]:
-    model.eval()
-
-    total_loss = 0.0
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
+    with context:
         for images, labels in loader:
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
 
+            if train and optimizer is not None:
+                optimizer.zero_grad()
+
             outputs = model(images)
             loss = criterion(outputs, labels)
+
+            if train and optimizer is not None:
+                loss.backward()
+                optimizer.step()
 
             total_loss += loss.item() * images.size(0)
             preds = outputs.argmax(dim=1)
@@ -223,35 +224,9 @@ def validate(
     return total_loss / total, correct / total
 
 
-def plot_training_history(history: list[dict], save_path: Path) -> None:
-    epochs = [h["epoch"] for h in history]
-    train_loss = [h["train_loss"] for h in history]
-    val_loss = [h["val_loss"] for h in history]
-    train_acc = [h["train_acc"] for h in history]
-    val_acc = [h["val_acc"] for h in history]
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(epochs, train_loss, label="Train Loss")
-    ax.plot(epochs, val_loss, label="Val Loss")
-    ax.plot(epochs, train_acc, label="Train Acc")
-    ax.plot(epochs, val_acc, label="Val Acc")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Value")
-    ax.set_title("CV Training History")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-
-    logger.info("Saved training history plot: %s", save_path)
-
-
 def train(
-    manifest_path: Path,
-    model_save_path: Path,
+    manifest_path: str | Path,
+    model_save_path: str | Path,
     image_size: int = 224,
     batch_size: int = 32,
     n_epochs: int = 10,
@@ -260,9 +235,12 @@ def train(
     lr_finetune: float = 1e-4,
     num_workers: int = 4,
     device_name: str = "auto",
-    history_json_path: Path | None = None,
-    history_plot_path: Path | None = None,
+    history_json_path: str | Path | None = None,
+    history_plot_path: str | Path | None = None,
 ) -> dict:
+    """
+    Train the anomaly detector and save the best checkpoint.
+    """
     if device_name == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -299,13 +277,10 @@ def train(
     best_val_acc = -1.0
     best_epoch = -1
 
-    logger.info("=" * 60)
-    logger.info("Starting CV training")
-    logger.info("=" * 60)
-
     for epoch in range(1, n_epochs + 1):
         if epoch == warmup_epochs + 1:
-            logger.info("Unfreezing backbone for fine-tuning phase")
+            logger.info("Unfreezing backbone for fine-tuning")
+
             for param in model.parameters():
                 param.requires_grad = True
 
@@ -316,35 +291,56 @@ def train(
                 eta_min=1e-6,
             )
 
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device
+        train_loss, train_acc = _run_epoch(
+            model=model,
+            loader=train_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+            train=True,
         )
-        val_loss, val_acc = validate(
-            model, val_loader, criterion, device
+        val_loss, val_acc = _run_epoch(
+            model=model,
+            loader=val_loader,
+            criterion=criterion,
+            optimizer=None,
+            device=device,
+            train=False,
         )
+
         scheduler.step()
 
         phase = "WARMUP" if epoch <= warmup_epochs else "FINETUNE"
 
-        row = {
-            "epoch": epoch,
-            "phase": phase,
-            "train_loss": round(train_loss, 4),
-            "train_acc": round(train_acc, 4),
-            "val_loss": round(val_loss, 4),
-            "val_acc": round(val_acc, 4),
-        }
-        history.append(row)
-
         logger.info(
             "Epoch %2d/%d [%s] | train_loss=%.4f train_acc=%.4f | val_loss=%.4f val_acc=%.4f",
-            epoch, n_epochs, phase, train_loss, train_acc, val_loss, val_acc
+            epoch,
+            n_epochs,
+            phase,
+            train_loss,
+            train_acc,
+            val_loss,
+            val_acc,
+        )
+
+        history.append(
+            {
+                "epoch": epoch,
+                "phase": phase,
+                "train_loss": round(train_loss, 4),
+                "train_acc": round(train_acc, 4),
+                "val_loss": round(val_loss, 4),
+                "val_acc": round(val_acc, 4),
+            }
         )
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_epoch = epoch
+
+            model_save_path = Path(model_save_path)
             model_save_path.parent.mkdir(parents=True, exist_ok=True)
+
             torch.save(
                 {
                     "epoch": epoch,
@@ -356,7 +352,8 @@ def train(
                 },
                 model_save_path,
             )
-            logger.info("New best model saved: %s", model_save_path)
+
+            logger.info("Saved best model | epoch=%d | val_acc=%.4f", epoch, val_acc)
 
     result = {
         "class_names": class_names,
@@ -366,12 +363,12 @@ def train(
     }
 
     if history_json_path is not None:
+        history_json_path = Path(history_json_path)
         history_json_path.parent.mkdir(parents=True, exist_ok=True)
         history_json_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        logger.info("Saved CV training history JSON: %s", history_json_path)
 
     if history_plot_path is not None:
-        plot_training_history(history, history_plot_path)
+        _plot_history(history, history_plot_path)
 
     logger.info(
         "Training complete | best_epoch=%d | best_val_acc=%.4f",
@@ -382,25 +379,28 @@ def train(
     return result
 
 
-if __name__ == "__main__":
-    config = load_config(PROJECT_ROOT / "configs" / "base.yaml")
+def _plot_history(history: list[dict], save_path: str | Path) -> None:
+    """
+    Save a simple training-history plot.
+    """
+    epochs = [row["epoch"] for row in history]
 
-    results_dir = PROJECT_ROOT / config["evaluation"]["results_dir"]
-    outputs_dir = PROJECT_ROOT / config["outputs"]["figures_dir"]
-    manifest_path = results_dir / "cv_split_manifest.json"
-    model_path = PROJECT_ROOT / config["cv_anomaly"]["model_save_path"]
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.plot(epochs, [row["train_loss"] for row in history], label="Train Loss")
+    ax.plot(epochs, [row["val_loss"] for row in history], label="Val Loss")
+    ax.plot(epochs, [row["train_acc"] for row in history], label="Train Acc")
+    ax.plot(epochs, [row["val_acc"] for row in history], label="Val Acc")
 
-    train(
-        manifest_path=manifest_path,
-        model_save_path=model_path,
-        image_size=config["cv_anomaly"]["image_size"],
-        batch_size=config["cv_anomaly"]["batch_size"],
-        n_epochs=config["cv_anomaly"]["epochs"],
-        warmup_epochs=3,
-        lr_warmup=1e-3,
-        lr_finetune=config["cv_anomaly"]["learning_rate"],
-        num_workers=4,
-        device_name="auto",
-        history_json_path=results_dir / "cv_training_history.json",
-        history_plot_path=outputs_dir / "cv_training_history.png",
-    )
+    ax.set_xlabel("Epoch")
+    ax.set_title("Training History")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    logger.info("Saved training history plot: %s", save_path)

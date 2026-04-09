@@ -1,11 +1,15 @@
+"""
+Top-level package for the causal demand forecasting platform.
+"""
+
 __all__ = [
     "data",
     "features",
     "forecasting",
     "evaluation",
     "causal",
-    "cv",
-    "elasticity",
+    "promotion_analysis",
+    "anomaly_detection",
     "llm",
     "simulation",
     "utils",

@@ -1,3 +1,10 @@
+"""
+SARIMAX forecaster run on a sample of high-volume series.
+
+SARIMAX is included as a classical statistical benchmark. It models each
+series separately and can use a small set of exogenous variables such as
+promotion status, oil price, and holidays.
+"""
 from __future__ import annotations
 
 import warnings
@@ -17,10 +24,7 @@ def run_sarimax_on_sample(
     n_series: int = 20,
 ) -> pd.DataFrame:
     """
-    Run SARIMAX on top-N series by training volume.
-
-    Returns columns:
-      store_nbr, item_nbr, date, unit_sales, forecast, lower_ci, upper_ci
+    Run SARIMAX on the top-N series by training demand volume.
     """
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
@@ -40,13 +44,12 @@ def run_sarimax_on_sample(
     exog_candidates = ["onpromotion", "oil_price", "is_holiday"]
     exog_cols = [c for c in exog_candidates if c in train_df.columns]
 
-    logger.info("SARIMAX: running on top %d series", len(top_series))
-    logger.info("SARIMAX exogenous columns: %s", exog_cols)
+    logger.info("SARIMAX: %d series | exog=%s", len(top_series), exog_cols)
 
     all_results = []
 
     for idx, (store, item) in enumerate(top_series, start=1):
-        logger.info("SARIMAX [%d/%d] store=%s item=%s", idx, len(top_series), store, item)
+        logger.info("SARIMAX [%d/%d] | store=%s item=%s", idx, len(top_series), store, item)
 
         mask_tr = (train_df[store_col] == store) & (train_df[item_col] == item)
         mask_te = (test_df[store_col] == store) & (test_df[item_col] == item)
@@ -68,13 +71,8 @@ def run_sarimax_on_sample(
         )
 
         try:
-            # Simpler and more robust model selection
-            if len(train_s) >= 180:
-                order = (1, 1, 1)
-                seasonal_order = (1, 1, 1, 7)
-            else:
-                order = (1, 1, 1)
-                seasonal_order = (0, 0, 0, 0)
+            order = (1, 1, 1)
+            seasonal_order = (1, 1, 1, 7) if len(train_s) >= 180 else (0, 0, 0, 0)
 
             model = SARIMAX(
                 train_s,
@@ -86,23 +84,13 @@ def run_sarimax_on_sample(
             )
             fit = model.fit(disp=False, maxiter=300)
 
-            logger.info(
-                "SARIMAX fitted | store=%s item=%s | AIC=%.2f | order=%s seasonal=%s",
-                store,
-                item,
-                fit.aic,
-                order,
-                seasonal_order,
-            )
-
             forecast_obj = fit.get_forecast(steps=len(test_s), exog=exog_test)
-            pred_mean = forecast_obj.predicted_mean
             ci = forecast_obj.conf_int(alpha=0.10)
 
             row = pd.DataFrame({
                 date_col: test_s.index,
                 target_col: test_s.values,
-                "forecast": pred_mean.values.clip(min=0),
+                "forecast": forecast_obj.predicted_mean.values.clip(min=0),
                 "lower_ci": ci.iloc[:, 0].values.clip(min=0),
                 "upper_ci": ci.iloc[:, 1].values.clip(min=0),
                 store_col: store,
@@ -113,7 +101,6 @@ def run_sarimax_on_sample(
 
         except Exception as exc:
             logger.warning("SARIMAX failed for store=%s item=%s | %s", store, item, exc)
-            continue
 
     if not all_results:
         logger.warning("SARIMAX produced no results")

@@ -10,7 +10,7 @@
 set -e
 
 echo "Job start: $(date)"
-echo "Node:   $SLURMD_NODENAME"
+echo "Node: $SLURMD_NODENAME"
 echo "Job ID: $SLURM_JOB_ID"
 
 source ~/.bashrc
@@ -23,7 +23,6 @@ import os
 print("ANTHROPIC_API_KEY set:", bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()))
 EOF
 
-echo "--- Week 6: LLM analytics pipeline ---"
-python scripts/run_llm_pipeline.py
+python scripts/llm_pipeline.py
 
 echo "Job end: $(date)"

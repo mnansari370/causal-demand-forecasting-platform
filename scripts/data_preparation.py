@@ -1,3 +1,16 @@
+"""
+Prepare the main train, validation, and test datasets.
+
+This script:
+1. loads the Favorita data (or the dev subset if enabled),
+2. cleans the training table,
+3. merges side tables,
+4. adds calendar features,
+5. performs a strict temporal split,
+6. saves the processed parquet files.
+
+All splits are chronological. We never use random splitting for time-series.
+"""
 from __future__ import annotations
 
 import json
@@ -9,33 +22,28 @@ sys.path.append(str(PROJECT_ROOT))
 
 from src.data.load_data import load_config, load_favorita_data, summarize_dataframe
 from src.data.preprocess import (
+    add_calendar_features,
     clean_train,
-    merge_stores,
+    merge_holidays,
     merge_items,
     merge_oil,
-    merge_holidays,
-    add_calendar_features,
-    temporal_split,
-    save_parquet,
+    merge_stores,
     save_csv,
+    save_parquet,
+    temporal_split,
 )
 from src.utils.logger import get_logger
 
 
 def main() -> None:
-    config_path = PROJECT_ROOT / "configs" / "base.yaml"
-    config = load_config(config_path)
-
+    config = load_config(PROJECT_ROOT / "configs" / "base.yaml")
     logger = get_logger(
-        "run_data_check",
+        "data_preparation",
         log_dir=PROJECT_ROOT / config["logs"]["log_dir"],
         level=config["logs"]["log_level"],
     )
 
-    logger.info("=" * 60)
-    logger.info("STEP 1: Loading Favorita data")
-    logger.info("=" * 60)
-
+    logger.info("Loading Favorita data")
     data = load_favorita_data(config)
 
     for name, df in data.items():
@@ -43,33 +51,28 @@ def main() -> None:
 
     train_df = data.get("train")
     if train_df is None:
-        logger.error("train.csv not found in %s", config["data"]["raw_data_dir"])
+        logger.error("Train data not found")
         sys.exit(1)
 
-    logger.info("=" * 60)
-    logger.info("STEP 2: Cleaning train data")
-    logger.info("=" * 60)
+    logger.info("Cleaning training data")
     train_df = clean_train(train_df, config)
 
-    logger.info("=" * 60)
-    logger.info("STEP 3: Merging side tables")
-    logger.info("=" * 60)
+    logger.info("Merging side tables")
     train_df = merge_stores(train_df, data.get("stores"))
     train_df = merge_items(train_df, data.get("items"))
     train_df = merge_oil(train_df, data.get("oil"), date_col=config["data"]["date_column"])
     train_df = merge_holidays(train_df, data.get("holidays_events"), date_col=config["data"]["date_column"])
 
-    logger.info("=" * 60)
-    logger.info("STEP 4: Adding calendar features")
-    logger.info("=" * 60)
+    logger.info("Adding calendar features")
     train_df = add_calendar_features(train_df, date_col=config["data"]["date_column"])
 
-    logger.info("Processed shape after feature enrichment: %s", train_df.shape)
-    logger.info("Memory usage: %.2f MB", train_df.memory_usage(deep=True).sum() / 1e6)
+    logger.info(
+        "Processed shape: %s | memory: %.2f MB",
+        train_df.shape,
+        train_df.memory_usage(deep=True).sum() / 1e6,
+    )
 
-    logger.info("=" * 60)
-    logger.info("STEP 5: Temporal split")
-    logger.info("=" * 60)
+    logger.info("Performing temporal split")
     train_split, val_split, test_split = temporal_split(
         train_df,
         date_col=config["data"]["date_column"],
@@ -77,17 +80,14 @@ def main() -> None:
     )
 
     processed_dir = PROJECT_ROOT / config["data"]["processed_data_dir"]
-    check_dir = PROJECT_ROOT / config["outputs"]["data_check_dir"]
-    check_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info("=" * 60)
-    logger.info("STEP 6: Saving outputs")
-    logger.info("=" * 60)
     save_parquet(train_split, processed_dir / "train.parquet")
     save_parquet(val_split, processed_dir / "val.parquet")
     save_parquet(test_split, processed_dir / "test.parquet")
 
-    save_csv(train_split.head(1000), check_dir / "train_sample_1k.csv")
+    check_dir = PROJECT_ROOT / config["outputs"]["data_check_dir"]
+    check_dir.mkdir(parents=True, exist_ok=True)
+
+    save_csv(train_split.head(1000), check_dir / "train_sample.csv")
 
     report = {
         "train_shape": list(train_split.shape),
@@ -102,12 +102,10 @@ def main() -> None:
     }
 
     report_path = check_dir / "data_quality_report.json"
-    report_path.write_text(json.dumps(report, indent=2))
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     logger.info("Wrote data quality report to: %s", report_path)
 
-    logger.info("=" * 60)
-    logger.info("Data check complete")
-    logger.info("=" * 60)
+    logger.info("Data preparation complete")
 
 
 if __name__ == "__main__":

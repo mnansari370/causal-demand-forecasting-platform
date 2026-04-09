@@ -1,3 +1,15 @@
+"""
+Data cleaning, merging, and temporal splitting for Favorita.
+
+Design notes:
+- Splits are always chronological. We never shuffle time-series data.
+- The raw 'onpromotion' column comes in as mixed object/string values and
+  needs explicit normalisation before it can be used as a model feature.
+- Oil price has missing dates, so we forward-fill and back-fill after
+  expanding to a complete daily date range.
+- Holiday information is split into national and local signals because
+  they affect demand differently.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,11 +24,13 @@ logger = get_logger(__name__)
 
 def clean_train(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
-    Basic cleaning of training data:
-    - fill missing promotions
-    - clip negative sales
-    - optional log transform
-    - filter date range
+    Apply basic cleaning to the training data.
+
+    Steps:
+    - normalise promotion values to 0/1
+    - clip negative sales to zero
+    - optionally apply log1p to the target
+    - restrict rows to the configured date window
     """
     df = df.copy()
 
@@ -26,27 +40,24 @@ def clean_train(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     prep = config["preprocessing"]
 
     if promo_col in df.columns:
-        logger.info("onpromotion dtype before cleaning: %s", df[promo_col].dtype)
-        logger.info(
-            "onpromotion value counts before cleaning:\n%s",
-            df[promo_col].value_counts(dropna=False).to_string()
-        )
+        logger.info("Promotion dtype before cleaning: %s", df[promo_col].dtype)
 
     if prep.get("fill_missing_promotions", False) and promo_col in df.columns:
+        # Raw CSV values are mixed booleans / strings / NaN, so we standardise
+        # them into an integer 0/1 representation.
         df[promo_col] = df[promo_col].fillna(False)
         df[promo_col] = df[promo_col].map(
-            lambda x: True if str(x).strip().lower() == "true" else False
+            lambda x: 1 if str(x).strip().lower() == "true" else 0
         )
         df[promo_col] = df[promo_col].astype(int)
 
-        logger.info("onpromotion dtype after cleaning: %s", df[promo_col].dtype)
         logger.info(
-            "onpromotion value counts after cleaning:\n%s",
-            df[promo_col].value_counts(dropna=False).to_string()
+            "Promotion value counts after cleaning: %s",
+            df[promo_col].value_counts(dropna=False).to_dict(),
         )
 
     if prep.get("clip_negative_sales", False) and target_col in df.columns:
-        n_neg = (df[target_col] < 0).sum()
+        n_neg = int((df[target_col] < 0).sum())
         if n_neg > 0:
             logger.info("Clipping %d negative sales values to 0", n_neg)
         df[target_col] = df[target_col].clip(lower=0)
@@ -67,22 +78,38 @@ def clean_train(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 
 
 def merge_stores(df: pd.DataFrame, stores: pd.DataFrame | None) -> pd.DataFrame:
+    """
+    Merge store metadata into the main dataframe.
+    """
     if stores is None:
-        logger.warning("stores table missing; skipping merge")
+        logger.warning("Stores table missing — skipping merge")
         return df
     return df.merge(stores, on="store_nbr", how="left")
 
 
 def merge_items(df: pd.DataFrame, items: pd.DataFrame | None) -> pd.DataFrame:
+    """
+    Merge item metadata into the main dataframe.
+    """
     if items is None:
-        logger.warning("items table missing; skipping merge")
+        logger.warning("Items table missing — skipping merge")
         return df
     return df.merge(items, on="item_nbr", how="left")
 
 
-def merge_oil(df: pd.DataFrame, oil: pd.DataFrame | None, date_col: str = "date") -> pd.DataFrame:
+def merge_oil(
+    df: pd.DataFrame,
+    oil: pd.DataFrame | None,
+    date_col: str = "date",
+) -> pd.DataFrame:
+    """
+    Merge daily oil price information.
+
+    Missing oil-price days are filled by carrying the last known value
+    forward, then backward for any initial gap.
+    """
     if oil is None:
-        logger.warning("oil table missing; skipping merge")
+        logger.warning("Oil table missing — skipping merge")
         return df
 
     oil = oil.copy().rename(columns={"dcoilwtico": "oil_price"})
@@ -97,9 +124,23 @@ def merge_oil(df: pd.DataFrame, oil: pd.DataFrame | None, date_col: str = "date"
     return df.merge(oil[[date_col, "oil_price"]], on=date_col, how="left")
 
 
-def merge_holidays(df: pd.DataFrame, holidays: pd.DataFrame | None, date_col: str = "date") -> pd.DataFrame:
+def merge_holidays(
+    df: pd.DataFrame,
+    holidays: pd.DataFrame | None,
+    date_col: str = "date",
+) -> pd.DataFrame:
+    """
+    Merge holiday signals.
+
+    We keep:
+    - is_holiday
+    - is_national_holiday
+    - is_local_holiday
+
+    This is intentionally simple and avoids overfitting to holiday labels.
+    """
     if holidays is None:
-        logger.warning("holidays_events table missing; skipping merge")
+        logger.warning("Holidays table missing — skipping merge")
         return df
 
     h = holidays.copy()
@@ -112,10 +153,15 @@ def merge_holidays(df: pd.DataFrame, holidays: pd.DataFrame | None, date_col: st
     local["is_local_holiday"] = 1
 
     df = df.merge(
-        h[[date_col, "is_holiday"]].drop_duplicates().groupby(date_col).max().reset_index(),
+        h[[date_col, "is_holiday"]]
+        .drop_duplicates()
+        .groupby(date_col)
+        .max()
+        .reset_index(),
         on=date_col,
         how="left",
     )
+
     df = df.merge(national, on=date_col, how="left")
     df = df.merge(local, on=date_col, how="left")
 
@@ -127,6 +173,12 @@ def merge_holidays(df: pd.DataFrame, holidays: pd.DataFrame | None, date_col: st
 
 
 def add_calendar_features(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
+    """
+    Add calendar-based predictors.
+
+    These features are cheap to compute and typically very useful in retail
+    demand forecasting, especially day-of-week and month effects.
+    """
     d = df[date_col]
 
     df["day_of_week"] = d.dt.dayofweek
@@ -136,12 +188,24 @@ def add_calendar_features(df: pd.DataFrame, date_col: str = "date") -> pd.DataFr
     df["month"] = d.dt.month
     df["quarter"] = d.dt.quarter
     df["year"] = d.dt.year
-    df["days_to_year_end"] = (pd.to_datetime(d.dt.year.astype(str) + "-12-31") - d).dt.days
+    df["days_to_year_end"] = (
+        pd.to_datetime(d.dt.year.astype(str) + "-12-31") - d
+    ).dt.days
 
     return df
 
 
-def temporal_split(df: pd.DataFrame, date_col: str, splits: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def temporal_split(
+    df: pd.DataFrame,
+    date_col: str,
+    splits: dict,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split data into train, validation, and test using time boundaries.
+
+    This is the correct split strategy for forecasting tasks because it
+    prevents future information from leaking into training.
+    """
     train = df[df[date_col] <= pd.to_datetime(splits["train_end"])]
     val = df[
         (df[date_col] >= pd.to_datetime(splits["val_start"])) &
@@ -152,11 +216,17 @@ def temporal_split(df: pd.DataFrame, date_col: str, splits: dict) -> tuple[pd.Da
         (df[date_col] <= pd.to_datetime(splits["test_end"]))
     ]
 
-    logger.info("Temporal split sizes -> train=%d, val=%d, test=%d", len(train), len(val), len(test))
+    logger.info(
+        "Temporal split | train=%d val=%d test=%d",
+        len(train), len(val), len(test),
+    )
     return train, val, test
 
 
 def save_parquet(df: pd.DataFrame, output_path: str | Path) -> None:
+    """
+    Save a dataframe as parquet.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
@@ -164,6 +234,9 @@ def save_parquet(df: pd.DataFrame, output_path: str | Path) -> None:
 
 
 def save_csv(df: pd.DataFrame, output_path: str | Path) -> None:
+    """
+    Save a dataframe as CSV.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
@@ -177,8 +250,12 @@ def add_lag_features(
     lag_days: list[int],
 ) -> pd.DataFrame:
     """
-    Add lag features per group.
-    Example: yesterday's sales, last week's sales, etc.
+    Add lag features within each series.
+
+    Example:
+    - lag 1  -> yesterday's sales
+    - lag 7  -> same weekday last week
+    - lag 28 -> same period last month
     """
     df = df.sort_values(group_cols + ["date"]).reset_index(drop=True)
 
@@ -197,7 +274,10 @@ def add_rolling_features(
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Add rolling mean and rolling std features based on past values only.
+    Add rolling mean and rolling std based on past values only.
+
+    The shift(1) is important: it ensures the current day's target is not
+    used to build its own features.
     """
     df = df.sort_values(group_cols + ["date"]).reset_index(drop=True)
 
@@ -210,7 +290,6 @@ def add_rolling_features(
         df[mean_col] = grouped.transform(
             lambda x: x.shift(1).rolling(window, min_periods=1).mean()
         )
-
         df[std_col] = grouped.transform(
             lambda x: x.shift(1).rolling(window, min_periods=1).std().fillna(0)
         )

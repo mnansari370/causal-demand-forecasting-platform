@@ -1,3 +1,15 @@
+"""
+Prophet forecaster run on a sample of high-volume series.
+
+Prophet is included as a classical interpretable benchmark. It is not the
+main production model here, but it is useful as a comparison against the
+tree-based models.
+
+Important:
+The train period ends before the test period begins, so Prophet must
+forecast far enough ahead to cover the full gap and then we keep only
+the dates that belong to the test window.
+"""
 from __future__ import annotations
 
 import warnings
@@ -17,15 +29,7 @@ def run_prophet_on_sample(
     n_series: int = 10,
 ) -> pd.DataFrame:
     """
-    Run Prophet on the top-N series by total training volume.
-
-    Important:
-    The test period is not immediately after the train period in your setup.
-    Train ends on 2016-12-31, while test starts on 2017-07-01.
-    So Prophet must forecast far enough ahead to cover the full gap.
-
-    Returns columns:
-      store_nbr, item_nbr, date, unit_sales, yhat, yhat_lower, yhat_upper
+    Run Prophet on the top-N series by training demand volume.
     """
     from prophet import Prophet
 
@@ -42,12 +46,12 @@ def run_prophet_on_sample(
         .index.tolist()
     )
 
-    logger.info("Prophet: running on top %d series", len(top_series))
+    logger.info("Prophet: running on top-%d series", len(top_series))
 
     all_results = []
 
     for idx, (store, item) in enumerate(top_series, start=1):
-        logger.info("Prophet [%d/%d] store=%s item=%s", idx, len(top_series), store, item)
+        logger.info("Prophet [%d/%d] | store=%s item=%s", idx, len(top_series), store, item)
 
         train_s = train_df[
             (train_df[store_col] == store) & (train_df[item_col] == item)
@@ -57,10 +61,8 @@ def run_prophet_on_sample(
             (test_df[store_col] == store) & (test_df[item_col] == item)
         ][[date_col, target_col]].sort_values(date_col).copy()
 
-        logger.info("train_s rows=%d | test_s rows=%d", len(train_s), len(test_s))
-
         if len(train_s) < 30 or len(test_s) == 0:
-            logger.info("Skipping Prophet series: insufficient rows")
+            logger.info("Skipping Prophet series: train=%d test=%d", len(train_s), len(test_s))
             continue
 
         train_s[date_col] = pd.to_datetime(train_s[date_col])
@@ -71,21 +73,10 @@ def run_prophet_on_sample(
 
         train_max_date = prophet_df["ds"].max()
         test_max_date = test_s[date_col].max()
-
         horizon_days = (test_max_date - train_max_date).days
-        logger.info(
-            "Prophet horizon | train_max=%s | test_max=%s | periods=%d",
-            train_max_date.date(),
-            test_max_date.date(),
-            horizon_days,
-        )
 
         if horizon_days <= 0:
-            logger.warning(
-                "Skipping Prophet series: non-positive horizon for store=%s item=%s",
-                store,
-                item,
-            )
+            logger.warning("Skipping Prophet series with non-positive horizon")
             continue
 
         try:
@@ -97,28 +88,20 @@ def run_prophet_on_sample(
                 changepoint_prior_scale=0.05,
             )
 
-            # Keep holidays disabled while debugging robustness
-            # model.add_country_holidays(country_name="EC")
-
             model.fit(prophet_df)
 
-            # Forecast all the way from train end to test end
             future = model.make_future_dataframe(periods=horizon_days, freq="D")
             forecast = model.predict(future)
-
             forecast["ds"] = pd.to_datetime(forecast["ds"])
 
-            # Keep only rows that belong to the actual test dates
             fc = forecast.merge(
                 test_s[[date_col]].rename(columns={date_col: "ds"}),
                 on="ds",
                 how="inner",
             )[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
 
-            logger.info("matched test forecast rows=%d", len(fc))
-
             if fc.empty:
-                logger.warning("Prophet matched zero rows for store=%s item=%s", store, item)
+                logger.warning("Prophet produced no matching test rows for store=%s item=%s", store, item)
                 continue
 
             fc = fc.rename(columns={"ds": date_col}).reset_index(drop=True)
@@ -134,7 +117,6 @@ def run_prophet_on_sample(
 
         except Exception as exc:
             logger.warning("Prophet failed for store=%s item=%s | %s", store, item, exc)
-            continue
 
     if not all_results:
         logger.warning("Prophet produced no results")

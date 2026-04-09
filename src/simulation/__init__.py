@@ -1,3 +1,7 @@
+"""
+Scenario simulation utilities.
+"""
+
 from .scenario_engine import (
     simulate_panel_scenario,
     simulate_did_scenario,

@@ -7,6 +7,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --partition=batch
 
+set -e
+
 echo "Job start: $(date)"
 echo "Node: $SLURMD_NODENAME"
 echo "Job ID: $SLURM_JOB_ID"
@@ -15,6 +17,6 @@ source ~/.bashrc
 conda activate cdf_env
 cd ~/causal-demand-forecasting-platform
 
-python scripts/run_forecasting_pipeline.py
+python scripts/forecasting.py
 
 echo "Job end: $(date)"

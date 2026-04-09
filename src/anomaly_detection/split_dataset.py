@@ -1,12 +1,14 @@
+"""
+Train/validation/test split builder for synthetic anomaly charts.
+
+We store the split as a manifest JSON so the exact dataset split remains
+fixed and reproducible across runs.
+"""
 from __future__ import annotations
 
 import json
 import random
-import sys
 from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(PROJECT_ROOT))
 
 from src.utils.logger import get_logger
 
@@ -21,28 +23,21 @@ def _list_pngs(class_dir: Path) -> list[str]:
 
 
 def build_split_manifest(
-    data_dir: Path,
-    output_path: Path,
+    data_dir: str | Path,
+    output_path: str | Path,
     train_frac: float = 0.70,
     val_frac: float = 0.15,
     test_frac: float = 0.15,
     seed: int = 42,
 ) -> dict:
     """
-    Build a fixed stratified split manifest for synthetic anomaly images.
-
-    Expected structure:
-      data_dir/
-        normal/
-        spike/
-        drop/
-        structural_break/
-
-    Output JSON contains absolute file paths grouped by split and class.
+    Build a fixed split manifest from class folders.
     """
-
     if abs((train_frac + val_frac + test_frac) - 1.0) > 1e-8:
         raise ValueError("train_frac + val_frac + test_frac must sum to 1.0")
+
+    data_dir = Path(data_dir)
+    output_path = Path(output_path)
 
     class_dirs = [p for p in sorted(data_dir.iterdir()) if p.is_dir()]
     if not class_dirs:
@@ -50,7 +45,7 @@ def build_split_manifest(
 
     rng = random.Random(seed)
 
-    manifest: dict = {
+    manifest = {
         "seed": seed,
         "data_dir": str(data_dir.resolve()),
         "fractions": {
@@ -65,13 +60,13 @@ def build_split_manifest(
         },
     }
 
-    logger.info("Building CV split manifest from: %s", data_dir)
+    logger.info("Building split manifest from: %s", data_dir)
 
     for class_dir in class_dirs:
         class_name = class_dir.name
         files = _list_pngs(class_dir)
 
-        if len(files) == 0:
+        if not files:
             raise ValueError(f"No PNG files found in class directory: {class_dir}")
 
         rng.shuffle(files)
@@ -87,44 +82,33 @@ def build_split_manifest(
                 f"train={n_train}, val={n_val}, test={n_test}"
             )
 
-        train_files = files[:n_train]
-        val_files = files[n_train:n_train + n_val]
-        test_files = files[n_train + n_val:]
-
-        manifest["splits"]["train"][class_name] = train_files
-        manifest["splits"]["val"][class_name] = val_files
-        manifest["splits"]["test"][class_name] = test_files
+        manifest["splits"]["train"][class_name] = files[:n_train]
+        manifest["splits"]["val"][class_name] = files[n_train:n_train + n_val]
+        manifest["splits"]["test"][class_name] = files[n_train + n_val:]
 
         logger.info(
             "Class %-18s total=%4d | train=%4d | val=%4d | test=%4d",
-            class_name, n_total, n_train, n_val, n_test
+            class_name,
+            n_total,
+            n_train,
+            n_val,
+            n_test,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    logger.info("Saved CV split manifest: %s", output_path)
 
+    logger.info("Saved split manifest: %s", output_path)
     return manifest
 
 
-def load_split_manifest(manifest_path: Path) -> dict:
+def load_split_manifest(manifest_path: str | Path) -> dict:
+    """
+    Load an existing split manifest.
+    """
+    manifest_path = Path(manifest_path)
+
     if not manifest_path.exists():
         raise FileNotFoundError(f"Split manifest not found: {manifest_path}")
+
     return json.loads(manifest_path.read_text(encoding="utf-8"))
-
-
-if __name__ == "__main__":
-    from src.data.load_data import load_config
-
-    config = load_config(PROJECT_ROOT / "configs" / "base.yaml")
-    data_dir = PROJECT_ROOT / config["cv_anomaly"]["synthetic_data_dir"]
-    output_path = PROJECT_ROOT / config["evaluation"]["results_dir"] / "cv_split_manifest.json"
-
-    build_split_manifest(
-        data_dir=data_dir,
-        output_path=output_path,
-        train_frac=0.70,
-        val_frac=0.15,
-        test_frac=0.15,
-        seed=config["project"]["random_seed"],
-    )

@@ -1,3 +1,10 @@
+"""
+Causal inference utilities.
+
+Includes Difference-in-Differences, placebo testing, causal forests,
+and the plotting functions for these results.
+"""
+
 from .did_estimator import (
     prepare_did_data,
     run_did,

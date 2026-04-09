@@ -1,3 +1,10 @@
+"""
+Data loading utilities for the Favorita dataset.
+
+Favorita is a multi-table retail dataset. The main train.csv is very large,
+so during development we often work with a date-filtered store subset saved
+as a parquet file. This module handles both cases through the config.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,8 +20,7 @@ logger = get_logger(__name__)
 
 def load_config(config_path: str | Path) -> dict:
     """
-    Load YAML configuration.
-    Single shared config loader for the whole project.
+    Load a YAML configuration file.
     """
     config_path = Path(config_path)
     if not config_path.exists():
@@ -31,37 +37,46 @@ def load_csv_safe(
     dtype: dict | None = None,
 ) -> pd.DataFrame | None:
     """
-    Load a CSV safely. Returns None if file does not exist.
+    Load a CSV safely.
+
+    Returns None if the file does not exist instead of raising immediately.
+    This is useful for optional side tables.
     """
     if not file_path.exists():
         logger.warning("File not found: %s", file_path)
         return None
 
-    logger.info("Loading file: %s", file_path)
+    logger.info("Loading: %s", file_path)
     df = pd.read_csv(file_path, parse_dates=parse_dates, nrows=nrows, dtype=dtype)
-    logger.info("Loaded shape for %s: %s", file_path.name, df.shape)
+    logger.info("Loaded %s — shape: %s", file_path.name, df.shape)
     return df
 
 
-def load_favorita_data(config: dict, sample_rows: int | None = None) -> Dict[str, pd.DataFrame | None]:
+def load_favorita_data(
+    config: dict,
+    sample_rows: int | None = None,
+) -> Dict[str, pd.DataFrame | None]:
     """
     Load Favorita tables.
-    If dev_subset.enabled is true and the subset file exists, load that instead of raw train.csv.
+
+    If dev_subset.enabled is true and the subset parquet exists, it is used
+    instead of reading the full raw train.csv. This keeps experimentation fast
+    while preserving temporal continuity inside selected stores.
     """
     raw_dir = Path(config["data"]["raw_data_dir"])
     interim_dir = Path(config["data"]["interim_data_dir"])
     files = config["data"]["files"]
     date_col = config["data"]["date_column"]
 
-    dev_subset_cfg = config.get("dev_subset", {})
-    dev_subset_enabled = dev_subset_cfg.get("enabled", False)
-    dev_subset_file = interim_dir / dev_subset_cfg.get("output_file", "train_dev_subset.parquet")
+    dev_cfg = config.get("dev_subset", {})
+    dev_subset_enabled = dev_cfg.get("enabled", False)
+    subset_path = interim_dir / dev_cfg.get("output_file", "train_dev_subset.parquet")
 
     n_rows = sample_rows if sample_rows is not None else config["preprocessing"].get("sample_rows")
 
-    if dev_subset_enabled and dev_subset_file.exists():
-        logger.info("Loading development subset from: %s", dev_subset_file)
-        train_df = pd.read_parquet(dev_subset_file)
+    if dev_subset_enabled and subset_path.exists():
+        logger.info("Loading development subset from: %s", subset_path)
+        train_df = pd.read_parquet(subset_path)
     else:
         train_df = load_csv_safe(
             raw_dir / files["train"],
@@ -85,10 +100,10 @@ def load_favorita_data(config: dict, sample_rows: int | None = None) -> Dict[str
 
 def summarize_dataframe(name: str, df: pd.DataFrame | None) -> None:
     """
-    Log compact summary of a dataframe.
+    Log a compact summary of a dataframe.
     """
     if df is None:
-        logger.warning("%s: NOT LOADED", name)
+        logger.warning("%s: not loaded", name)
         return
 
     missing = df.isnull().sum()

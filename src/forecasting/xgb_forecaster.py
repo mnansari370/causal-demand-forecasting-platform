@@ -1,3 +1,10 @@
+"""
+XGBoost point forecaster.
+
+This model is included as a strong tree-based comparison against LightGBM.
+On this project, LightGBM is expected to be the stronger primary model,
+but XGBoost remains a useful benchmark.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,11 +21,7 @@ logger = get_logger(__name__)
 
 class XGBPointForecaster:
     """
-    XGBoost point forecaster.
-
-    This version avoids early_stopping_rounds because the currently installed
-    XGBoost version in your environment does not support that argument in fit().
-    To reduce overfitting risk, n_estimators is lowered from 2000 to 500.
+    XGBoost regressor for point forecasting.
     """
 
     def __init__(self, params: dict | None = None) -> None:
@@ -48,6 +51,9 @@ class XGBPointForecaster:
         X_val: pd.DataFrame,
         y_val: pd.Series,
     ) -> None:
+        """
+        Train the XGBoost model.
+        """
         self.feature_names_ = list(X_train.columns)
         self.model = xgb.XGBRegressor(**self.params)
 
@@ -58,17 +64,23 @@ class XGBPointForecaster:
             verbose=100,
         )
 
-        logger.info("XGBoost point model trained")
+        logger.info("XGBoost trained")
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict non-negative unit sales.
+        """
         if self.model is None:
-            raise ValueError("Model has not been trained.")
-        preds = self.model.predict(X)
-        return np.clip(preds, 0, None)
+            raise RuntimeError("Model has not been trained yet.")
+        return np.clip(self.model.predict(X), 0, None)
 
     def feature_importance(self) -> pd.DataFrame:
+        """
+        Return feature importances as a sorted dataframe.
+        """
         if self.model is None:
-            raise ValueError("Model has not been trained.")
+            raise RuntimeError("Model has not been trained yet.")
+
         return (
             pd.DataFrame(
                 {
@@ -81,13 +93,21 @@ class XGBPointForecaster:
         )
 
     def save(self, path: str | Path) -> None:
+        """
+        Save the trained model to disk.
+        """
         if self.model is None:
-            raise ValueError("Model has not been trained.")
+            raise RuntimeError("Model has not been trained yet.")
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.model, path)
-        logger.info("Saved XGBoost model to: %s", path)
+
+        logger.info("Saved XGBoost model: %s", path)
 
     def load(self, path: str | Path) -> None:
+        """
+        Load a previously saved model.
+        """
         self.model = joblib.load(path)
-        logger.info("Loaded XGBoost model from: %s", path)
+        logger.info("Loaded XGBoost model: %s", path)

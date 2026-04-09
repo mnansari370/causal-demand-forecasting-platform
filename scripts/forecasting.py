@@ -1,3 +1,21 @@
+"""
+Train and evaluate the forecasting models.
+
+Models included:
+- Seasonal Naive baseline (loaded from saved baseline results)
+- LightGBM point forecast
+- LightGBM quantile forecast
+- XGBoost point forecast
+- Prophet on a small sample of high-volume series
+- SARIMAX on a small sample of high-volume series
+
+This script saves:
+- forecasting_results.csv / .json
+- model artifacts
+- feature importance plots
+- quantile calibration plot
+- one sample forecast plot with prediction intervals
+"""
 from __future__ import annotations
 
 import json
@@ -35,9 +53,8 @@ from src.utils.logger import get_logger
 
 def main() -> None:
     config = load_config(PROJECT_ROOT / "configs" / "base.yaml")
-
     logger = get_logger(
-        "run_forecasting_pipeline",
+        "forecasting",
         log_dir=PROJECT_ROOT / config["logs"]["log_dir"],
         level=config["logs"]["log_level"],
     )
@@ -47,8 +64,18 @@ def main() -> None:
     figures_dir = PROJECT_ROOT / config["outputs"]["figures_dir"]
     models_dir = PROJECT_ROOT / config["outputs"]["models_dir"]
 
-    for d in [results_dir, figures_dir, models_dir]:
-        d.mkdir(parents=True, exist_ok=True)
+    for directory in [results_dir, figures_dir, models_dir]:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    for split in ["train_features", "val_features", "test_features"]:
+        path = processed_dir / f"{split}.parquet"
+        if not path.exists():
+            logger.error("%s not found. Run scripts/feature_engineering.py first.", path)
+            sys.exit(1)
+
+    train_df = pd.read_parquet(processed_dir / "train_features.parquet")
+    val_df = pd.read_parquet(processed_dir / "val_features.parquet")
+    test_df = pd.read_parquet(processed_dir / "test_features.parquet")
 
     target_col = config["data"]["target_column"]
     date_col = config["data"]["date_column"]
@@ -56,28 +83,11 @@ def main() -> None:
     item_col = config["data"]["item_column"]
     promo_col = config["data"]["promo_column"]
 
-    logger.info("=" * 60)
-    logger.info("STAGE 1: Loading feature parquets")
-    logger.info("=" * 60)
-
-    for split in ["train_features", "val_features", "test_features"]:
-        p = processed_dir / f"{split}.parquet"
-        if not p.exists():
-            logger.error("%s not found. Run scripts/build_forecasting_features.py first.", p)
-            sys.exit(1)
-
-    train_df = pd.read_parquet(processed_dir / "train_features.parquet")
-    val_df = pd.read_parquet(processed_dir / "val_features.parquet")
-    test_df = pd.read_parquet(processed_dir / "test_features.parquet")
-
-    logger.info("Loaded shapes | Train=%s | Val=%s | Test=%s", train_df.shape, val_df.shape, test_df.shape)
-
-    logger.info("=" * 60)
-    logger.info("STAGE 2: Promotion features + target encoding")
-    logger.info("=" * 60)
-
-    full_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
-    full_df = full_df.sort_values([store_col, item_col, date_col]).reset_index(drop=True)
+    full_df = (
+        pd.concat([train_df, val_df, test_df], ignore_index=True)
+        .sort_values([store_col, item_col, date_col])
+        .reset_index(drop=True)
+    )
 
     if promo_col in full_df.columns:
         full_df = add_promotion_features(
@@ -98,6 +108,7 @@ def main() -> None:
         )
 
     splits = config["splits"]
+
     train_df = full_df[full_df[date_col] <= pd.to_datetime(splits["train_end"])].copy()
     val_df = full_df[
         (full_df[date_col] >= pd.to_datetime(splits["val_start"])) &
@@ -108,12 +119,6 @@ def main() -> None:
         (full_df[date_col] <= pd.to_datetime(splits["test_end"]))
     ].copy()
 
-    logger.info("After new features | Train=%s | Val=%s | Test=%s", train_df.shape, val_df.shape, test_df.shape)
-
-    logger.info("=" * 60)
-    logger.info("STAGE 3: Building X/y matrices")
-    logger.info("=" * 60)
-
     feature_cols = get_feature_columns(train_df, config)
 
     X_train = train_df[feature_cols].fillna(0)
@@ -123,36 +128,35 @@ def main() -> None:
     X_test = test_df[feature_cols].fillna(0)
     y_test = test_df[target_col].values
 
-    logger.info("X_train=%s | X_val=%s | X_test=%s", X_train.shape, X_val.shape, X_test.shape)
-    logger.info("Using %d features", len(feature_cols))
+    logger.info(
+        "Feature matrix | train=%s | val=%s | test=%s",
+        X_train.shape,
+        X_val.shape,
+        X_test.shape,
+    )
 
     all_results: list[dict] = []
 
-    logger.info("=" * 60)
-    logger.info("STAGE 4: Loading Week 1 baseline")
-    logger.info("=" * 60)
-
-    baseline_path = results_dir / "week1_baseline_results.json"
+    baseline_path = results_dir / "baseline_results.json"
     if baseline_path.exists():
         with open(baseline_path, "r", encoding="utf-8") as f:
-            week1_results = json.load(f)
+            baseline_results = json.load(f)
 
-        for row in week1_results:
+        for row in baseline_results:
             if row.get("evaluation_split") == "test":
-                all_results.append({
-                    "model": row["model"],
-                    "rmse": row["rmse"],
-                    "mae": row["mae"],
-                    "mape": row["mape"],
-                    "coverage_90": None,
-                    "interval_width": None,
-                    "n_samples": len(y_test),
-                })
+                all_results.append(
+                    {
+                        "model": row["model"],
+                        "rmse": row["rmse"],
+                        "mae": row["mae"],
+                        "mape": row["mape"],
+                        "coverage_90": None,
+                        "interval_width": None,
+                        "n_samples": len(y_test),
+                    }
+                )
 
-    logger.info("=" * 60)
-    logger.info("STAGE 5: LightGBM Point Forecast")
-    logger.info("=" * 60)
-
+    logger.info("Training LightGBM point forecast")
     lgbm_point = LGBMPointForecaster()
     lgbm_point.fit(X_train, y_train, X_val, y_val)
     lgbm_point.save(models_dir / "lgbm_point.pkl")
@@ -168,10 +172,7 @@ def main() -> None:
         save_path=figures_dir / "lgbm_feature_importance.png",
     )
 
-    logger.info("=" * 60)
-    logger.info("STAGE 6: LightGBM Quantile Forecast")
-    logger.info("=" * 60)
-
+    logger.info("Training LightGBM quantile forecast")
     lgbm_q = LGBMQuantileForecaster(quantiles=[0.05, 0.5, 0.95])
     lgbm_q.fit(X_train, y_train, X_val, y_val)
     lgbm_q.save(models_dir / "lgbm_quantile")
@@ -188,15 +189,17 @@ def main() -> None:
         )
     )
 
-    q_preds_df = pd.DataFrame({
-        date_col: test_df[date_col].values,
-        store_col: test_df[store_col].values,
-        item_col: test_df[item_col].values,
-        "actual": y_test,
-        "q0.05": q_preds["q0.05"],
-        "q0.5": q_preds["q0.5"],
-        "q0.95": q_preds["q0.95"],
-    })
+    q_preds_df = pd.DataFrame(
+        {
+            date_col: test_df[date_col].values,
+            store_col: test_df[store_col].values,
+            item_col: test_df[item_col].values,
+            "actual": y_test,
+            "q0.05": q_preds["q0.05"],
+            "q0.5": q_preds["q0.5"],
+            "q0.95": q_preds["q0.95"],
+        }
+    )
     q_preds_df.to_parquet(results_dir / "lgbm_quantile_predictions.parquet", index=False)
 
     plot_calibration(
@@ -214,17 +217,14 @@ def main() -> None:
         plot_forecast_with_intervals(
             dates=test_df.loc[sample_mask, date_col],
             y_true=test_df.loc[sample_mask, target_col].values,
-            y_pred_q10=q_preds["q0.05"][sample_mask.values],
+            y_pred_q05=q_preds["q0.05"][sample_mask.values],
             y_pred_q50=q_preds["q0.5"][sample_mask.values],
-            y_pred_q90=q_preds["q0.95"][sample_mask.values],
-            title=f"LightGBM Quantile — Store {first_store} Item {first_item}",
+            y_pred_q95=q_preds["q0.95"][sample_mask.values],
+            title=f"Demand Forecast with 90% PI — Store {first_store}, Item {first_item}",
             save_path=figures_dir / "sample_quantile_forecast.png",
         )
 
-    logger.info("=" * 60)
-    logger.info("STAGE 7: XGBoost Point Forecast")
-    logger.info("=" * 60)
-
+    logger.info("Training XGBoost point forecast")
     xgb_model = XGBPointForecaster()
     xgb_model.fit(X_train, y_train, X_val, y_val)
     xgb_model.save(models_dir / "xgb_point.pkl")
@@ -240,67 +240,60 @@ def main() -> None:
         save_path=figures_dir / "xgb_feature_importance.png",
     )
 
-    logger.info("=" * 60)
-    logger.info("STAGE 8: Prophet")
-    logger.info("=" * 60)
-
+    logger.info("Running Prophet on a sample")
     prophet_df = run_prophet_on_sample(train_df, test_df, config, n_series=10)
     if not prophet_df.empty:
         prophet_df.to_csv(results_dir / "prophet_predictions.csv", index=False)
 
-        result = evaluate_point_forecast(
+        prophet_result = evaluate_point_forecast(
             prophet_df[target_col].values,
             prophet_df["yhat"].values,
             "Prophet (10-series sample)",
         )
-        cov = float(np.mean(
-            (prophet_df[target_col].values >= prophet_df["yhat_lower"].values) &
-            (prophet_df[target_col].values <= prophet_df["yhat_upper"].values)
-        ))
-        result["coverage_90"] = round(cov, 4)
-        result["interval_width"] = round(
+        prophet_result["coverage_90"] = round(
+            float(
+                np.mean(
+                    (prophet_df[target_col].values >= prophet_df["yhat_lower"].values) &
+                    (prophet_df[target_col].values <= prophet_df["yhat_upper"].values)
+                )
+            ),
+            4,
+        )
+        prophet_result["interval_width"] = round(
             float(np.mean(prophet_df["yhat_upper"].values - prophet_df["yhat_lower"].values)),
             4,
         )
-        all_results.append(result)
+        all_results.append(prophet_result)
 
-    logger.info("=" * 60)
-    logger.info("STAGE 9: SARIMAX")
-    logger.info("=" * 60)
-
+    logger.info("Running SARIMAX on a sample")
     sarimax_df = run_sarimax_on_sample(train_df, test_df, config, n_series=20)
     if not sarimax_df.empty:
         sarimax_df.to_csv(results_dir / "sarimax_predictions.csv", index=False)
 
-        result = evaluate_point_forecast(
+        sarimax_result = evaluate_point_forecast(
             sarimax_df[target_col].values,
             sarimax_df["forecast"].values,
             "SARIMAX (20-series sample)",
         )
-        cov = float(np.mean(
-            (sarimax_df[target_col].values >= sarimax_df["lower_ci"].values) &
-            (sarimax_df[target_col].values <= sarimax_df["upper_ci"].values)
-        ))
-        result["coverage_90"] = round(cov, 4)
-        result["interval_width"] = round(
+        sarimax_result["coverage_90"] = round(
+            float(
+                np.mean(
+                    (sarimax_df[target_col].values >= sarimax_df["lower_ci"].values) &
+                    (sarimax_df[target_col].values <= sarimax_df["upper_ci"].values)
+                )
+            ),
+            4,
+        )
+        sarimax_result["interval_width"] = round(
             float(np.mean(sarimax_df["upper_ci"].values - sarimax_df["lower_ci"].values)),
             4,
         )
-        all_results.append(result)
-
-    logger.info("=" * 60)
-    logger.info("STAGE 10: Saving results table")
-    logger.info("=" * 60)
+        all_results.append(sarimax_result)
 
     results_df = build_results_table(all_results)
-    save_results(results_df, results_dir, name="week2_forecasting_results")
+    save_results(results_df, results_dir, name="forecasting_results")
 
-    logger.info("=" * 60)
-    logger.info("Week 2 full forecasting pipeline complete")
-    logger.info("Results: %s", results_dir)
-    logger.info("Models : %s", models_dir)
-    logger.info("Figures: %s", figures_dir)
-    logger.info("=" * 60)
+    logger.info("Forecasting pipeline complete")
 
 
 if __name__ == "__main__":
