@@ -115,8 +115,8 @@ llm:
   # Default to mock mode so the pipeline can run without an API key.
   # To enable live responses, set provider to "anthropic" and export
   # ANTHROPIC_API_KEY in the environment.
-  provider: "mock"
-  model_name: "claude-3-5-haiku-latest"
+  provider: "anthropic"
+  model_name: "claude-haiku-4-5"
   max_tokens: 600
   temperature: 0.2
 
